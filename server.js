@@ -182,166 +182,158 @@ async function interactWithAssistant(userMessage, userNumber) {
 
 // Vérification du statut d'un run
 async function pollForCompletion(threadId, runId) {
-    return new Promise((resolve, reject) => {
-      // Intervalle entre deux vérifications de statut :
-      const interval = 2000;      // Cada 2 seg
-      // Limite de temps avant un abandon :
-      const timeoutLimit = 80000; // Máx 80 seg
-      let elapsedTime = 0;
-  
-      const checkRun = async () => {
-        try {
-          // Récupérer le statut du run
-          const runStatus = await openai.beta.threads.runs.retrieve(threadId, runId);
-          console.log(`📊 Estado del run: ${runStatus.status}`);
-  
-          // 1) Si le run est terminé : on récupère la réponse finale
-          if (runStatus.status === 'completed') {
-            const messages = await fetchThreadMessages(threadId);
-            console.log("📩 Respuesta final del asistente:", messages);
-            resolve(messages);
+  return new Promise((resolve, reject) => {
+    const interval = 2000; // Intervalle : 2 secondes
+    const timeoutLimit = 80000; // Timeout max : 80 secondes
+    let elapsedTime = 0;
+
+    const checkRun = async () => {
+      try {
+        const runStatus = await openai.beta.threads.runs.retrieve(threadId, runId);
+        console.log(`📊 Estado del run: ${runStatus.status}`);
+
+        if (runStatus.status === 'completed') {
+          const messages = await fetchThreadMessages(threadId);
+          console.log("📩 Réponse finale de l'assistant:", messages);
+          resolve(messages);
+          return;
+        }
+
+        else if (runStatus.status === 'requires_action') {
+          if (runStatus.required_action?.submit_tool_outputs?.tool_calls) {
+            const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
+
+            for (const toolCall of toolCalls) {
+              let params;
+              try {
+                params = JSON.parse(toolCall.function.arguments);
+              } catch (error) {
+                console.error("❌ Erreur en parsant les arguments JSON:", error);
+                reject(error);
+                return;
+              }
+
+            try {
+              switch (toolCall.function.name) {
+
+                // Case existant : getAppointments
+                case "getAppointments": {
+                  const appointments = await db.collection("appointments")
+                                              .find({ date: params.date })
+                                              .toArray();
+
+                  const toolOutputs = [{
+                    tool_call_id: toolCall.id,
+                    output: JSON.stringify(appointments),
+                  }];
+
+                  await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+                    tool_outputs: toolOutputs
+                  });
+
+                  setTimeout(checkRun, 500);
+                  return;
+                }
+
+                // Nouveau Case : get_image_url
+                case "get_image_url": {
+                  console.log("🖼️ Demande d'URL image reçue:", params);
+                
+                  const imageUrl = await getImageUrl(params.imageCode);
+                
+                  const toolOutputs = [{
+                    tool_call_id: toolCall.id,
+                    output: JSON.stringify({ imageUrl })
+                  }];
+                
+                  await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+                    tool_outputs: toolOutputs
+                  });
+                
+                  setTimeout(checkRun, 500);
+                  return;
+                }
+
+                // Case existant : cancelAppointment
+                case "cancelAppointment": {
+                  const wasDeleted = await cancelAppointment(params.phoneNumber);
+                  const toolOutputs = [{
+                    tool_call_id: toolCall.id,
+                    output: JSON.stringify({
+                      success: wasDeleted,
+                      message: wasDeleted
+                        ? "La cita ha sido cancelada."
+                        : "No se encontró ninguna cita para ese número."
+                    })
+                  }];
+
+                  await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+                    tool_outputs: toolOutputs
+                  });
+
+                  setTimeout(checkRun, 500);
+                  return;
+                }
+
+                // Case existant : createAppointment
+                case "createAppointment": {
+                  const result = await createAppointment(params);
+                  const toolOutputs = [{
+                    tool_call_id: toolCall.id,
+                    output: JSON.stringify({
+                      success: result.success,
+                      message: result.message
+                    })
+                  }];
+
+                  await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+                    tool_outputs: toolOutputs
+                  });
+
+                  setTimeout(checkRun, 500);
+                  return;
+                }
+
+                default: {
+                  console.warn(`⚠️ Fonction inconnue: ${toolCall.function.name}`);
+                  setTimeout(checkRun, 500);
+                  return;
+                }
+              }
+
+              } catch (error) {
+                console.error(`❌ Erreur dans la fonction ${toolCall.function.name}:`, error);
+                reject(error);
+                return;
+              }
+            }
+          }
+
+          setTimeout(checkRun, interval);
+        }
+
+        else {
+          elapsedTime += interval;
+          if (elapsedTime >= timeoutLimit) {
+            console.error("⏳ Timeout (80s), annulation du run...");
+            await openai.beta.threads.runs.cancel(threadId, runId);
+            reject(new Error("Run annulé après 80s sans réponse."));
             return;
           }
-  
-          // 2) Si le run demande une action (function calling)
-          else if (runStatus.status === 'requires_action') {
-            console.log("🔄 El asistente solicita llamadas a funciones.");
-  
-            // On vérifie s'il y a des tool_calls à effectuer
-            if (runStatus.required_action?.submit_tool_outputs?.tool_calls) {
-              const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
-  
-              for (const toolCall of toolCalls) {
-                console.log("🔍 Función solicitada:", toolCall.function.name);
-  
-                // Lecture des arguments de la fonction
-                let params;
-                try {
-                  params = JSON.parse(toolCall.function.arguments);
-                } catch (error) {
-                  console.error("❌ Error parseando los argumentos JSON:", error);
-                  reject(error);
-                  return;
-                }
-  
-                // Gestion de chaque fonction spécifique
-                try {
-                  switch (toolCall.function.name) {
-                    
-                    // *************** getAppointments ***************
-                    case "getAppointments": {
-                      console.log("📅 Parámetros para getAppointments:", params);
-                      const appointments = await db.collection("appointments")
-                                                  .find({ date: params.date })
-                                                  .toArray();
-  
-                      // Construire la sortie
-                      const toolOutputs = [{
-                        tool_call_id: toolCall.id,
-                        output: JSON.stringify(appointments),
-                      }];
-  
-                      // Envoyer la réponse de la fonction à OpenAI
-                      await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-                        tool_outputs: toolOutputs
-                      });
-  
-                      // Retourner dans le polling (pas de resolve ici)
-                      setTimeout(checkRun, 500);
-                      return; // on quitte cette itération
-  
-                    }
-  
-                    // *************** cancelAppointment ***************
-                    case "cancelAppointment": {
-                      console.log("📅 Parámetros para cancelAppointment:", params);
-                      const wasDeleted = await cancelAppointment(params.phoneNumber);
-  
-                      const toolOutputs = [{
-                        tool_call_id: toolCall.id,
-                        output: JSON.stringify({
-                          success: wasDeleted,
-                          message: wasDeleted
-                            ? "La cita ha sido cancelada."
-                            : "No se encontró ninguna cita para ese número."
-                        })
-                      }];
-  
-                      await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-                        tool_outputs: toolOutputs
-                      });
-  
-                      // Revenir au polling
-                      setTimeout(checkRun, 500);
-                      return;
-                    }
-  
-                    // *************** createAppointment ***************
-                    case "createAppointment": {
-                      console.log("📅 Parámetros para createAppointment:", params);
-                      const result = await createAppointment(params);
-  
-                      const toolOutputs = [{
-                        tool_call_id: toolCall.id,
-                        output: JSON.stringify({
-                          success: result.success,
-                          message: result.message
-                        })
-                      }];
-  
-                      await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-                        tool_outputs: toolOutputs
-                      });
-  
-                      // Revenir au polling
-                      setTimeout(checkRun, 500);
-                      return;
-                    }
-  
-                    default: {
-                      console.warn(`⚠️ Función desconocida: ${toolCall.function.name}`);
-                      // On peut simplement relancer le polling si nécessaire
-                      setTimeout(checkRun, 500);
-                      return;
-                    }
-                  }
-  
-                } catch (error) {
-                  console.error(`❌ Error en la función ${toolCall.function.name}:`, error);
-                  reject(error);
-                  return;
-                }
-              } // fin du for (const toolCall...)
-            } // fin du if toolCalls
-  
-            // Si le runStatus est requires_action mais qu'il n'y a pas de tool_calls,
-            // on relance juste le polling
-            setTimeout(checkRun, interval);
-          }
-  
-          // 3) Sinon (status "running" ou autre) : on continue le polling
-          else {
-            elapsedTime += interval;
-            if (elapsedTime >= timeoutLimit) {
-              console.error("⏳ Timeout (80s) => Cancelando run...");
-              await openai.beta.threads.runs.cancel(threadId, runId);
-              reject(new Error("Run cancelado tras 20s sin respuesta."));
-              return;
-            }
-  
-            setTimeout(checkRun, interval);
-          }
-  
-        } catch (error) {
-          console.error("❌ Error en pollForCompletion:", error);
-          reject(error);
+
+          setTimeout(checkRun, interval);
         }
-      };
-  
-      // Premier appel de la boucle
-      checkRun();
-    });
-  }  
+
+      } catch (error) {
+        console.error("Erreur dans pollForCompletion:", error);
+        reject(error);
+      }
+    };
+
+    // Premier appel
+    checkRun();
+  });
+}
 
 // Récupérer les messages d'un thread
 async function fetchThreadMessages(threadId) {
@@ -500,7 +492,7 @@ async function cancelAppointment(phoneNumber) {
     // 2) Supprimer l’event côté Google si googleEventId existe
     if (appointment.googleEventId) {
       await calendar.events.delete({
-        calendarId: 'primary',
+        calendarId: 'diegodfr75@gmail.com',
         eventId: appointment.googleEventId
       });
       console.log("Événement GoogleCalendar supprimé:", appointment.googleEventId);
@@ -518,15 +510,14 @@ async function cancelAppointment(phoneNumber) {
 }
 
 // Fonction pour récupérer les URLs des images depuis MongoDB
-async function getImageUrls(imageCodes) {
-    try {
-        const imagesCollection = db.collection('images');
-        const images = await imagesCollection.find({ _id: { $in: imageCodes } }).toArray();
-        return images.map(img => img.url);
-    } catch (error) {
-        console.error("Erreur lors de la récupération des images :", error);
-        return [];
-    }
+async function getImageUrl(imageCode) {
+  try {
+    const image = await db.collection("images").findOne({ _id: imageCode });
+    return image ? image.url : null;
+  } catch (error) {
+    console.error("Erreur récupération URL image:", error);
+    return null;
+  }
 }
 
 // Modification du endpoint WhatsApp pour gérer les images
@@ -536,21 +527,22 @@ app.post('/whatsapp', async (req, res) => {
 
   try {
     // 1) Vérifier la structure du body : Meta envoie { object, entry: [...] }
-    const entry = req.body?.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
-
-    if (!message) {
+    if (
+      !req.body.entry ||
+      !req.body.entry[0].changes ||
+      !req.body.entry[0].changes[0].value.messages
+    ) {
       return res.status(200).send('Aucun message entrant.');
     }
 
+    const value = req.body.entry[0].changes[0].value;
+    const message = value.messages[0];
     const from = message.from;
     const phoneNumberId = value.metadata.phone_number_id;
 
-    // 2) Déterminer le type de message
+    // 2) Déterminer le type de message et extraire le texte
     let userMessage = '';
-    if (message.type === 'text' && message.text?.body) {
+    if (message.type === 'text' && message.text.body) {
       userMessage = message.text.body.trim();
     } else if (message.type === 'image') {
       userMessage = "Cliente envió una imagen.";
@@ -565,42 +557,53 @@ app.post('/whatsapp', async (req, res) => {
     }
 
     // 3) Envoyer le message à l'assistant
-    const { text, images } = await interactWithAssistant(userMessage, from);
+    const response = await interactWithAssistant(userMessage, from);
 
-    // 4) Répondre à l'utilisateur via WhatsApp Cloud API
+    // 3) Récupération de la réponse
+    const { text, images } = response;
+
+    // 4) Répondre à l'utilisateur via l’API WhatsApp Cloud
     const apiUrl = `https://graph.facebook.com/v16.0/${phoneNumberId}/messages`;
     const headers = {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     };
 
-    // Envoi du texte
+    // Envoi du texte si disponible
     if (text) {
-      await axios.post(apiUrl, {
-        messaging_product: 'whatsapp',
-        to: from,
-        text: { body: text },
-      }, { headers });
+      await axios.post(
+        apiUrl,
+        {
+          messaging_product: 'whatsapp',
+          to: from,
+          text: { body: text },
+        },
+        { headers }
+      );
     }
 
-    // Envoi des images
-    if (images?.length > 0) {
+    // Envoi des images récupérées via function calling
+    if (images && images.length > 0) {
       for (const url of images) {
         if (url) {
-          await axios.post(apiUrl, {
-            messaging_product: 'whatsapp',
-            to: from,
-            type: 'image',
-            image: { link: url },
-          }, { headers });
+          await axios.post(
+            apiUrl,
+            {
+              messaging_product: 'whatsapp',
+              to: from,
+              type: 'image',
+              image: { link: url },
+            },
+            { headers }
+        );
         }
       }
     }
 
-    return res.status(200).send('Message envoyé avec succès');
+    res.status(200).send('Message envoyé avec succès');
   } catch (error) {
-    console.error("❌ Erreur lors du traitement du message WhatsApp:", error);
-    return res.status(500).json({ error: "Erreur interne." });
+    console.error("Erreur lors du traitement du message WhatsApp:", error);
+    res.status(500).json({ error: "Erreur interne." });
   }
 });
 
