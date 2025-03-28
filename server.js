@@ -111,7 +111,7 @@ startCalendar();
 // Fonction pour récupérer ou créer un thread
 async function getOrCreateThreadId(userNumber) {
   try {
-    const collection = db.collection('threads');
+    const collection = db.collection('threads1');
     let thread = await collection.findOne({ userNumber });
     if (!thread) {
       const threadResponse = await openai.beta.threads.create();
@@ -156,7 +156,7 @@ async function interactWithAssistant(userMessage, userNumber) {
   
       // Sauvegarde des messages et du thread dans MongoDB
       if (messages) {
-        const collection = db.collection('threads');
+        const collection = db.collection('threads1');
         await collection.updateOne(
           { userNumber },
           {
