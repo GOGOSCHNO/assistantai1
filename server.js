@@ -344,6 +344,72 @@ async function pollForCompletion(threadId, runId) {
   }  
 
 // Récupérer les messages d'un thread
+async function fetchThreadMessages(threadId) {
+  try {
+    const messagesResponse = await openai.beta.threads.messages.list(threadId);
+    const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
+
+    const latestMessage = messages[0];
+    let textContent = latestMessage.content
+      .filter(c => c.type === 'text')
+      .map(c => c.text.value)
+      .join(" ");
+
+    // Extraction des URLs Markdown du texte
+    const markdownUrlRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+    let match;
+    const markdownImageUrls = [];
+
+    while ((match = markdownUrlRegex.exec(textContent)) !== null) {
+      markdownImageUrls.push(match[1]);
+    }
+
+    // Nettoyage des URL markdown du texte
+    textContent = textContent.replace(markdownUrlRegex, '').trim();
+
+    // Suppression des références internes 【XX:XX†nomfichier.json】
+    textContent = textContent.replace(/【\d+:\d+†[^\]]+】/g, '').trim();
+
+    // Fonction de conversion Markdown OpenAI → Markdown WhatsApp
+    function convertMarkdownToWhatsApp(text) {
+      return text
+        .replace(/\*\*(.*?)\*\*/g, '*$1*')          // Gras: **texte** → *texte*
+        .replace(/\*(.*?)\*/g, '_$1_')              // Italique: *texte* → _texte_
+        .replace(/~~(.*?)~~/g, '~$1~')              // Barré: ~~texte~~ → ~texte~
+        .replace(/!\[.*?\]\((.*?)\)/g, '')          // Suppression images markdown
+        .replace(/\[(.*?)\]\((.*?)\)/g, '$1 : $2')  // Liens markdown → texte : URL
+        .replace(/^>\s?(.*)/gm, '$1')               // Citations markdown supprimées
+        .replace(/^(\d+)\.\s/gm, '- ')              // Listes numérotées → tirets
+        .trim();
+    }
+
+    // Application de la conversion Markdown
+    textContent = convertMarkdownToWhatsApp(textContent);
+
+    // Récupération des images issues du Function Calling
+    const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
+    const toolImageUrls = toolMessages
+      .map(msg => {
+        try {
+          return JSON.parse(msg.content[0].text.value).imageUrl;
+        } catch {
+          return null;
+        }
+      })
+      .filter(url => url != null);
+
+    // Fusion des deux sources d'images (Markdown + Function Calling)
+    const images = [...markdownImageUrls, ...toolImageUrls];
+
+    return {
+      text: textContent,
+      images: images
+    };
+  } catch (error) {
+    console.error("Erreur lors de la récupération des messages du thread:", error);
+    return { text: "", images: [] };
+  }
+}
 
 async function createAppointment(params) {
   // Vérifier si le client Google Calendar est déjà initialisé
