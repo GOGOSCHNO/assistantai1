@@ -521,26 +521,34 @@ async function getImageUrl(imageCode) {
 }
 
 // Modification du endpoint WhatsApp pour gérer les images
-// Endpoint pour recevoir les messages WhatsApp Cloud API
 app.post('/whatsapp', async (req, res) => {
-  console.log('Requête reçue :', JSON.stringify(req.body, null, 2));
+  console.log('📩 Requête reçue :', JSON.stringify(req.body, null, 2));
 
   try {
-    // 1) Vérifier la structure du body : Meta envoie { object, entry: [...] }
-    if (
-      !req.body.entry ||
-      !req.body.entry[0].changes ||
-      !req.body.entry[0].changes[0].value.messages
-    ) {
-      return res.status(200).send('Aucun message entrant.');
+    const entry = req.body?.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const field = changes?.field;
+
+    // 🚫 Ignorer les événements qui ne sont pas de type "messages"
+    if (field !== "messages" || !value.messages || !value.messages[0]) {
+      return res.status(200).send("Pas un message entrant à traiter.");
     }
 
-    const value = req.body.entry[0].changes[0].value;
     const message = value.messages[0];
     const from = message.from;
     const phoneNumberId = value.metadata.phone_number_id;
+    const messageId = message.id;
 
-    // 2) Déterminer le type de message et extraire le texte
+    // ✅ Vérifier si ce message a déjà été traité
+    const alreadyProcessed = await db.collection('processedMessages').findOne({ messageId });
+    if (alreadyProcessed) {
+      console.log("⚠️ Message déjà traité, on ignore :", messageId);
+      return res.status(200).send("Message déjà traité.");
+    }
+    await db.collection('processedMessages').insertOne({ messageId });
+
+    // 🧠 Extraire le contenu utilisateur
     let userMessage = '';
     if (message.type === 'text' && message.text.body) {
       userMessage = message.text.body.trim();
@@ -556,20 +564,18 @@ app.post('/whatsapp', async (req, res) => {
       return res.status(200).send('Message vide ou non géré.');
     }
 
-    // 3) Envoyer le message à l'assistant
+    // 🔄 Envoyer le message à l’assistant
     const response = await interactWithAssistant(userMessage, from);
-
-    // 3) Récupération de la réponse
     const { text, images } = response;
 
-    // 4) Répondre à l'utilisateur via l’API WhatsApp Cloud
+    // 📤 Répondre via l'API WhatsApp Cloud
     const apiUrl = `https://graph.facebook.com/v16.0/${phoneNumberId}/messages`;
     const headers = {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     };
 
-    // Envoi du texte si disponible
+    // 🗣️ Envoi du texte
     if (text) {
       await axios.post(
         apiUrl,
@@ -582,7 +588,7 @@ app.post('/whatsapp', async (req, res) => {
       );
     }
 
-    // Envoi des images récupérées via function calling
+    // 🖼️ Envoi des images (fonction calling ou markdown)
     if (images && images.length > 0) {
       for (const url of images) {
         if (url) {
@@ -595,15 +601,16 @@ app.post('/whatsapp', async (req, res) => {
               image: { link: url },
             },
             { headers }
-        );
+          );
         }
       }
     }
 
-    res.status(200).send('Message envoyé avec succès');
+    res.status(200).send('Message traité avec succès.');
+
   } catch (error) {
-    console.error("Erreur lors du traitement du message WhatsApp:", error);
-    res.status(500).json({ error: "Erreur interne." });
+    console.error("❌ Erreur lors du traitement du message WhatsApp :", error);
+    res.status(500).json({ error: "Erreur serveur." });
   }
 });
 
