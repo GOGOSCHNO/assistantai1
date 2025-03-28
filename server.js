@@ -344,18 +344,7 @@ async function pollForCompletion(threadId, runId) {
   }  
 
 // Récupérer les messages d'un thread
-async function fetchThreadMessages(threadId) {
-  try {
-    const messagesResponse = await openai.beta.threads.messages.list(threadId);
-    const messages = messagesResponse.data
-      .filter(msg => msg.role === 'assistant' && msg.content && msg.content.length > 0)
-      .map(msg => msg.content.map(content => content.text.value).join(" "));
-    return messages.length > 0 ? messages[0] : "";
-  } catch (error) {
-    console.error("Erreur lors de la récupération des messages du thread:", error);
-    return "";
-  }
-}
+
 async function createAppointment(params) {
   // Vérifier si le client Google Calendar est déjà initialisé
   if (!calendar) {
