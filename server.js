@@ -536,26 +536,21 @@ app.post('/whatsapp', async (req, res) => {
 
   try {
     // 1) Vérifier la structure du body : Meta envoie { object, entry: [...] }
-    if (
-      !req.body.entry ||
-      !req.body.entry[0].changes ||
-      !req.body.entry[0].changes[0].value.messages
-    ) {
-      // Pas de message entrant : on répond 200 pour signifier qu'on a bien reçu l'event
+    const entry = req.body?.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
       return res.status(200).send('Aucun message entrant.');
     }
 
-    // Récupération des infos importantes
-    const value = req.body.entry[0].changes[0].value;
-    const message = value.messages[0];                // Le message entrant
-    const from = message.from;                        // Numéro de l'expéditeur (ex. "573009016472")
-    const phoneNumberId = value.metadata.phone_number_id; 
-      // phone_number_id renvoyé par Meta (ex. "577116808821334"), 
-      // tu peux utiliser la variable globale "whatsappPhoneNumberId" si c'est toujours le même
+    const from = message.from;
+    const phoneNumberId = value.metadata.phone_number_id;
 
-    // 2) Déterminer le type de message et extraire le texte
+    // 2) Déterminer le type de message
     let userMessage = '';
-    if (message.type === 'text' && message.text.body) {
+    if (message.type === 'text' && message.text?.body) {
       userMessage = message.text.body.trim();
     } else if (message.type === 'image') {
       userMessage = "Cliente envió una imagen.";
@@ -566,73 +561,46 @@ app.post('/whatsapp', async (req, res) => {
     }
 
     if (!userMessage) {
-      // Pas de texte exploitable => on arrête
       return res.status(200).send('Message vide ou non géré.');
     }
 
-    // 3) Envoyer le message à l'assistant (logique existante)
-    const reply = await interactWithAssistant(userMessage, from);
+    // 3) Envoyer le message à l'assistant
+    const { text, images } = await interactWithAssistant(userMessage, from);
 
-    // 4) Extraire d'éventuels codes d’images dans la réponse
-    const imageCodes = extractImageCodes(reply);
-    const imageUrls = await getImageUrls(imageCodes);
-    let cleanedReply = cleanReply(reply);
-
-    // Si pas de texte mais qu’on a des images => on met un texte par défaut
-    if (!cleanedReply && imageUrls.length > 0) {
-      cleanedReply = "La imagen :";
-    }
-
-    // Si vraiment rien à envoyer
-    if (!cleanedReply && imageUrls.length === 0) {
-      console.error("Erreur : Aucun texte ou média à envoyer.");
-      return res.status(200).send('Aucun contenu à envoyer.');
-    }
-
-    // 5) Répondre à l'utilisateur via l’API WhatsApp Cloud
-    //    -> On utilise "axios.post(...)" vers "graph.facebook.com/v16.0/{phoneNumberId}/messages"
-    //    -> phoneNumberId : ID du numéro WhatsApp (ex. "577116808821334")
-    //    -> token : ton token permanent
+    // 4) Répondre à l'utilisateur via WhatsApp Cloud API
     const apiUrl = `https://graph.facebook.com/v16.0/${phoneNumberId}/messages`;
     const headers = {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     };
 
-    // 5a) Envoyer le message textuel s'il existe
-    if (cleanedReply) {
-      await axios.post(
-        apiUrl,
-        {
-          messaging_product: 'whatsapp',
-          to: from, // ex. "573009016472"
-          text: { body: cleanedReply },
-        },
-        { headers }
-      );
+    // Envoi du texte
+    if (text) {
+      await axios.post(apiUrl, {
+        messaging_product: 'whatsapp',
+        to: from,
+        text: { body: text },
+      }, { headers });
     }
 
-    // 5b) Envoyer les images si disponibles
-    for (const url of imageUrls) {
-      if (url) {
-        await axios.post(
-          apiUrl,
-          {
+    // Envoi des images
+    if (images?.length > 0) {
+      for (const url of images) {
+        if (url) {
+          await axios.post(apiUrl, {
             messaging_product: 'whatsapp',
             to: from,
             type: 'image',
             image: { link: url },
-          },
-          { headers }
-        );
+          }, { headers });
+        }
       }
     }
 
-    // 6) Retour OK
-    res.status(200).send('Message envoyé avec succès');
+    return res.status(200).send('Message envoyé avec succès');
   } catch (error) {
-    console.error("Erreur lors du traitement du message WhatsApp:", error);
-    res.status(500).json({ error: "Erreur interne." });
+    console.error("❌ Erreur lors du traitement du message WhatsApp:", error);
+    return res.status(500).json({ error: "Erreur interne." });
   }
 });
 
