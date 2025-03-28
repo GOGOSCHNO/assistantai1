@@ -517,13 +517,6 @@ async function cancelAppointment(phoneNumber) {
   }
 }
 
-// Fonction pour extraire les codes image
-function extractImageCodes(reply) {
-    const imageCodes = reply.match(/naysa\d+/g) || [];
-    console.log("Codes image détectés :", imageCodes);
-    return imageCodes;
-}
-
 // Fonction pour récupérer les URLs des images depuis MongoDB
 async function getImageUrls(imageCodes) {
     try {
@@ -535,12 +528,6 @@ async function getImageUrls(imageCodes) {
         return [];
     }
 }
-
-// Fonction pour nettoyer la réponse
-function cleanReply(reply) {
-    return reply.replace(/naysa\d+/g, '').trim();
-}
-
 
 // Modification du endpoint WhatsApp pour gérer les images
 // Endpoint pour recevoir les messages WhatsApp Cloud API
