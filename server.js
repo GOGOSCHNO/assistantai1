@@ -87,12 +87,13 @@ async function interactWithAssistant(userMessage, userNumber) {
   
     try {
       const threadId = await getOrCreateThreadId(userNumber);
-      const currentDateTime = new Date().toLocaleString('es-ES', { timeZone: 'America/Bogota' });
+      const dateISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' });
+      const heure = new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' });
   
       // Envoi du message utilisateur à OpenAI
       await openai.beta.threads.messages.create(threadId, {
         role: "user",
-        content: `Mensaje del cliente: "${userMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha y hora del mensaje: ${currentDateTime}`
+        content: `Mensaje del cliente: "${userMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${dateISO} Hora actual: ${heure}`
       });
   
       // Création d'un nouveau "run" pour générer la réponse
@@ -108,7 +109,7 @@ async function interactWithAssistant(userMessage, userNumber) {
   
       // Sauvegarde des messages et du thread dans MongoDB
       if (messages) {
-        const collection = db.collection('threads1');
+        const collection = db.collection('threads2');
         await collection.updateOne(
           { userNumber },
           {
@@ -116,7 +117,10 @@ async function interactWithAssistant(userMessage, userNumber) {
             $push: {
               responses: {
                 userMessage,
-                assistantResponse: messages,
+                assistantResponse: {
+                  text: messages.text,
+                  note: messages.note // ✅ ici on stocke la note !
+                },
                 timestamp: new Date()
               }
             }
@@ -151,52 +155,137 @@ async function pollForCompletion(threadId, runId) {
           return;
         }
 
-        if (runStatus.status === 'requires_action' &&
-            runStatus.required_action?.submit_tool_outputs?.tool_calls) {
+        if (
+          runStatus.status === 'requires_action' &&
+          runStatus.required_action?.submit_tool_outputs?.tool_calls
+        ) {
           const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
+          const toolOutputs = [];
 
           for (const toolCall of toolCalls) {
+            const { function: fn, id } = toolCall;
             let params;
+
             try {
-              params = JSON.parse(toolCall.function.arguments);
+              params = JSON.parse(fn.arguments);
             } catch (error) {
               console.error("❌ Erreur en parsant les arguments JSON:", error);
               reject(error);
               return;
             }
 
-            if (toolCall.function.name === "get_image_url") {
-              console.log("🖼️ Demande d'URL image reçue:", params);
-              const imageUrl = await getImageUrl(params.imageCode);
+            switch (fn.name) {
+              case "getAppointments": {
+                if (!calendar) {
+                  await initGoogleCalendarClient(); // au cas où non initialisé
+                }
+              
+                try {
+                  const startOfDay = `${params.date}T00:00:00-05:00`; // Bogota timezone
+                  const endOfDay = `${params.date}T23:59:59-05:00`;
+              
+                  const res = await calendar.events.list({
+                    calendarId: params.calendarId,
+                    timeMin: new Date(startOfDay).toISOString(),
+                    timeMax: new Date(endOfDay).toISOString(),
+                    singleEvents: true,
+                    orderBy: 'startTime',
+                  });
+              
+                  const appointments = res.data.items.map(event => ({
+                    start: event.start.dateTime,
+                    end: event.end.dateTime,
+                    summary: event.summary,
+                  }));
+              
+                  toolOutputs.push({
+                    tool_call_id: id,
+                    output: JSON.stringify(appointments),
+                  });
+                } catch (error) {
+                  console.error("❌ Erreur lors de la récupération des RDV Google Calendar :", error);
+                  toolOutputs.push({
+                    tool_call_id: id,
+                    output: JSON.stringify({ error: "Erreur Google Calendar" }),
+                  });
+                }
+                break;
+              }
 
-              const toolOutputs = [{
-                tool_call_id: toolCall.id,
-                output: JSON.stringify({ imageUrl })
-              }];
+              case "cancelAppointment": {
+                const wasDeleted = await cancelAppointment(params.phoneNumber);
 
-              await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-                tool_outputs: toolOutputs
-              });
+                toolOutputs.push({
+                  tool_call_id: id,
+                  output: JSON.stringify({
+                    success: wasDeleted,
+                    message: wasDeleted
+                      ? "La cita ha sido cancelada."
+                      : "No se encontró ninguna cita para ese número."
+                  })
+                });
+                break;
+              }
 
-              setTimeout(checkRun, 500);
-              return;
-            } else {
-              console.warn(`⚠️ Fonction non gérée (hors MVP): ${toolCall.function.name}`);
-              setTimeout(checkRun, 500);
-              return;
+              case "createAppointment": {
+                const result = await createAppointment(params);
+
+                toolOutputs.push({
+                  tool_call_id: id,
+                  output: JSON.stringify({
+                    success: result.success,
+                    message: result.message
+                  })
+                });
+                break;
+              }
+
+              case "get_image_url": {
+                console.log("🖼️ Demande d'URL image reçue:", params);
+                const imageUrl = await getImageUrl(params.imageCode);
+
+                toolOutputs.push({
+                  tool_call_id: id,
+                  output: JSON.stringify({ imageUrl })
+                });
+                break;
+              }
+
+              case "notificar_comerciante": {
+                console.log("📣 Function calling détectée : notificar_comerciante");
+                const { estado, numero_cliente } = params;
+                await enviarAlertaComerciante(estado, numero_cliente);
+                toolOutputs.push({
+                  tool_call_id: id,
+                  output: JSON.stringify({ success: true })
+                });
+                break;
+              }
+
+              default:
+                console.warn(`⚠️ Fonction inconnue (non gérée) : ${fn.name}`);
             }
           }
-        } else {
-          elapsedTime += interval;
-          if (elapsedTime >= timeoutLimit) {
-            console.error("⏳ Timeout (80s), annulation du run...");
-            await openai.beta.threads.runs.cancel(threadId, runId);
-            reject(new Error("Run annulé après 80s sans réponse."));
-            return;
+
+          if (toolOutputs.length > 0) {
+            await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+              tool_outputs: toolOutputs
+            });
           }
 
-          setTimeout(checkRun, interval);
+          setTimeout(checkRun, 500);
+          return;
         }
+
+        elapsedTime += interval;
+        if (elapsedTime >= timeoutLimit) {
+          console.error("⏳ Timeout (80s), annulation du run...");
+          await openai.beta.threads.runs.cancel(threadId, runId);
+          reject(new Error("Run annulé après 80s sans réponse."));
+          return;
+        }
+
+        setTimeout(checkRun, interval);
 
       } catch (error) {
         console.error("Erreur dans pollForCompletion:", error);
@@ -235,16 +324,34 @@ async function fetchThreadMessages(threadId) {
     // Suppression des références internes 【XX:XX†nomfichier.json】
     textContent = textContent.replace(/【\d+:\d+†[^\]]+】/g, '').trim();
 
-    // Fonction de conversion Markdown OpenAI → Markdown WhatsApp
+    // ➕ Détection et extraction de la nota interna
+    let summaryNote = null;
+    let statusNote = null;
+
+    const noteStart = textContent.indexOf('--- Nota interna ---');
+    if (noteStart !== -1) {
+      const noteContent = textContent.slice(noteStart).replace(/[-]+/g, '').trim();
+
+      const resumenMatch = noteContent.match(/Resumen\s*:\s*(.+)/i);
+      const estadoMatch = noteContent.match(/Estado\s*:\s*(.+)/i);
+
+      summaryNote = resumenMatch ? resumenMatch[1].trim() : null;
+      statusNote = estadoMatch ? estadoMatch[1].trim() : null;
+
+      // Supprimer la note du texte envoyé au client
+      textContent = textContent.slice(0, noteStart).trim();
+    }
+
+    // ➕ Conversion Markdown OpenAI → Markdown WhatsApp
     function convertMarkdownToWhatsApp(text) {
       return text
-        .replace(/\*\*(.*?)\*\*/g, '*$1*')          // Gras: **texte** → *texte*
-        .replace(/\*(.*?)\*/g, '_$1_')              // Italique: *texte* → _texte_
-        .replace(/~~(.*?)~~/g, '~$1~')              // Barré: ~~texte~~ → ~texte~
-        .replace(/!\[.*?\]\((.*?)\)/g, '')          // Suppression images markdown
-        .replace(/\[(.*?)\]\((.*?)\)/g, '$1 : $2')  // Liens markdown → texte : URL
-        .replace(/^>\s?(.*)/gm, '$1')               // Citations markdown supprimées
-        .replace(/^(\d+)\.\s/gm, '- ')              // Listes numérotées → tirets
+        .replace(/\*\*(.*?)\*\*/g, '*$1*')          // Gras
+        .replace(/\*(.*?)\*/g, '_$1_')              // Italique
+        .replace(/~~(.*?)~~/g, '~$1~')              // Barré
+        .replace(/!\[.*?\]\((.*?)\)/g, '')          // Images
+        .replace(/\[(.*?)\]\((.*?)\)/g, '$1 : $2')  // Liens
+        .replace(/^>\s?(.*)/gm, '$1')               // Citations
+        .replace(/^(\d+)\.\s/gm, '- ')              // Listes
         .trim();
     }
 
@@ -254,27 +361,31 @@ async function fetchThreadMessages(threadId) {
     // Récupération des images issues du Function Calling
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
     const toolImageUrls = toolMessages
-      .map(msg => {
-        try {
-          return JSON.parse(msg.content[0].text.value).imageUrl;
-        } catch {
-          return null;
-        }
-      })
-      .filter(url => url != null);
+      .map(msg => msg.content?.[0]?.text?.value)
+      .filter(url => url && url.startsWith('http'));
 
-    // Fusion des deux sources d'images (Markdown + Function Calling)
     const images = [...markdownImageUrls, ...toolImageUrls];
 
+    // ✅ Retour complet avec note extraite
     return {
       text: textContent,
-      images: images
+      images: images,
+      note: {
+        summary: summaryNote,
+        status: statusNote
+      }
     };
+
   } catch (error) {
     console.error("Erreur lors de la récupération des messages du thread:", error);
-    return { text: "", images: [] };
+    return {
+      text: "",
+      images: [],
+      note: null
+    };
   }
 }
+
 
 // Fonction pour récupérer les URLs des images depuis MongoDB
 async function getImageUrl(imageCode) {
