@@ -28,6 +28,9 @@ if (!mongoUri) {
     process.exit(1);
 }
 
+const locks = new Map(); // clé: userNumber, valeur: boolean (true = en cours)
+const messageQueue = new Map(); // clé: userNumber, valeur: array de messages en attente
+
 let db;  // Variable pour stocker la connexion à MongoDB
 
 async function connectToMongoDB() {
@@ -44,6 +47,30 @@ async function connectToMongoDB() {
 
 // Appel de la connexion MongoDB
 connectToMongoDB();
+
+async function handleMessage(userMessage, userNumber) {
+  if (locks.get(userNumber)) {
+    console.log(`⏳ Assistant occupé pour ${userNumber}, message en file d’attente.`);
+    if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
+    messageQueue.get(userNumber).push(userMessage);
+    return;
+  }
+
+  locks.set(userNumber, true);
+  try {
+    const response = await interactWithAssistant(userMessage, userNumber);
+    await sendResponseToWhatsApp(response, userNumber); // Tu peux l’extraire de ta route /whatsapp
+  } catch (error) {
+    console.error("Erreur dans handleMessage:", error);
+  } finally {
+    locks.set(userNumber, false);
+    const queue = messageQueue.get(userNumber) || [];
+    if (queue.length > 0) {
+      const nextMessage = queue.shift();
+      setTimeout(() => handleMessage(nextMessage, userNumber), 1000); // traitement du message suivant après 1s
+    }
+  }
+}
 
 // Middleware
 app.use(cors({
@@ -398,6 +425,36 @@ async function getImageUrl(imageCode) {
   }
 }
 
+async function sendResponseToWhatsApp(response, userNumber) {
+  const { text, images } = response;
+  const apiUrl = `https://graph.facebook.com/v16.0/${whatsappPhoneNumberId}/messages`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+
+  if (text) {
+    await axios.post(apiUrl, {
+      messaging_product: 'whatsapp',
+      to: userNumber,
+      text: { body: text },
+    }, { headers });
+  }
+
+  if (images && images.length > 0) {
+    for (const url of images) {
+      if (url) {
+        await axios.post(apiUrl, {
+          messaging_product: 'whatsapp',
+          to: userNumber,
+          type: 'image',
+          image: { link: url },
+        }, { headers });
+      }
+    }
+  }
+}
+
 // Modification du endpoint WhatsApp pour gérer les images
 app.post('/whatsapp', async (req, res) => {
   console.log('📩 Requête reçue :', JSON.stringify(req.body, null, 2));
@@ -443,7 +500,7 @@ app.post('/whatsapp', async (req, res) => {
     }
 
     // 🔄 Envoyer le message à l’assistant
-    const response = await interactWithAssistant(userMessage, from);
+    const response = await handleMessage(userMessage, from);
     const { text, images } = response;
 
     // 📤 Répondre via l'API WhatsApp Cloud
