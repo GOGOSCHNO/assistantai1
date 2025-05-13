@@ -472,7 +472,6 @@ app.post('/whatsapp', async (req, res) => {
 
     const message = value.messages[0];
     const from = message.from;
-    const phoneNumberId = value.metadata.phone_number_id;
     const messageId = message.id;
 
     // ✅ Vérifier si ce message a déjà été traité
@@ -499,49 +498,10 @@ app.post('/whatsapp', async (req, res) => {
       return res.status(200).send('Message vide ou non géré.');
     }
 
-    // 🔄 Envoyer le message à l’assistant
-    const response = await handleMessage(userMessage, from);
-    const { text, images } = response;
+    // 🔄 Envoyer le message à handleMessage (qui appelle OpenAI + répond au client)
+    await handleMessage(userMessage, from);
 
-    // 📤 Répondre via l'API WhatsApp Cloud
-    const apiUrl = `https://graph.facebook.com/v16.0/${phoneNumberId}/messages`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-
-    // 🗣️ Envoi du texte
-    if (text) {
-      await axios.post(
-        apiUrl,
-        {
-          messaging_product: 'whatsapp',
-          to: from,
-          text: { body: text },
-        },
-        { headers }
-      );
-    }
-
-    // 🖼️ Envoi des images (fonction calling ou markdown)
-    if (images && images.length > 0) {
-      for (const url of images) {
-        if (url) {
-          await axios.post(
-            apiUrl,
-            {
-              messaging_product: 'whatsapp',
-              to: from,
-              type: 'image',
-              image: { link: url },
-            },
-            { headers }
-          );
-        }
-      }
-    }
-
-    res.status(200).send('Message traité avec succès.');
+    res.status(200).send('Message reçu et en cours de traitement.');
 
   } catch (error) {
     console.error("❌ Erreur lors du traitement du message WhatsApp :", error);
