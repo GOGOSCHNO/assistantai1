@@ -43,6 +43,11 @@ async function connectToMongoDB() {
     console.error("❌ Erreur lors de la connexion à MongoDB :", err);
     process.exit(1);
   }
+  await db.collection('processedMessages').createIndex(
+    { createdAt: 1 },
+    { expireAfterSeconds: 86400 } // 86400 secondes = 24 heures
+  );
+  console.log("🧹 Index TTL activé sur processedMessages (expiration après 24h).");
 }
 
 // Appel de la connexion MongoDB
@@ -480,7 +485,10 @@ app.post('/whatsapp', async (req, res) => {
       console.log("⚠️ Message déjà traité, on ignore :", messageId);
       return res.status(200).send("Message déjà traité.");
     }
-    await db.collection('processedMessages').insertOne({ messageId });
+    await db.collection('processedMessages').insertOne({
+      messageId,
+      createdAt: new Date()
+    });
 
     // 🧠 Extraire le contenu utilisateur
     let userMessage = '';
