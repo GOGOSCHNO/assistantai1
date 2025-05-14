@@ -8,6 +8,7 @@ const OpenAI = require("openai");
 const { MongoClient } = require('mongodb');
 const twilio = require('twilio');
 const axios = require('axios');
+const { google } = require('googleapis');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -167,6 +168,154 @@ async function interactWithAssistant(userMessage, userNumber) {
       throw error;
     }
   }  
+
+async function initGoogleCalendarClient() {
+    try {
+      const serviceAccountJson = process.env.SERVICE_ACCOUNT_KEY; 
+      if (!serviceAccountJson) {
+        console.error("SERVICE_ACCOUNT_KEY n'est pas défini en variable d'env.");
+        return;
+      }
+      const key = JSON.parse(serviceAccountJson);
+      console.log("Compte de service :", key.client_email);
+  
+      const client = new google.auth.JWT(
+        key.client_email,
+        null,
+        key.private_key,
+        ['https://www.googleapis.com/auth/calendar']
+      );
+      
+      await client.authorize();
+      calendar = google.calendar({ version: 'v3', auth: client });
+      console.log('✅ Client Google Calendar initialisé');
+    } catch (error) {
+      console.error("❌ Erreur d'init du client Google Calendar :", error);
+    }
+  }
+
+async function startCalendar() {
+  await initGoogleCalendarClient();  // on attend l'init
+  if (calendar) {
+    try {
+      const res = await calendar.calendarList.list();
+      console.log('\n📅 Agendas disponibles :');
+      (res.data.items || []).forEach(cal => {
+        console.log(`- ID: ${cal.id}, Summary: ${cal.summary}`);
+      });
+    } catch (err) {
+      console.error("❌ Erreur lors de la récupération des agendas :", err);
+    }
+  }
+}
+  // Appeler une seule fois :
+  startCalendar();
+
+  async function createAppointment(params) {
+    // Vérifier si le client Google Calendar est déjà initialisé
+    if (!calendar) {
+      try {
+        const serviceAccountJson = process.env.SERVICE_ACCOUNT_KEY;
+        if (!serviceAccountJson) {
+          console.error("SERVICE_ACCOUNT_KEY n'est pas défini en variable d'env.");
+          return { success: false, message: "Service account non configuré." };
+        }
+        const key = JSON.parse(serviceAccountJson);
+        console.log("Compte de service :", key.client_email);
+  
+        // Création du client JWT
+        const client = new google.auth.JWT(
+          key.client_email,
+          null,
+          key.private_key,
+          ['https://www.googleapis.com/auth/calendar']
+        );
+  
+        // Authentification
+        await client.authorize();
+  
+        // Initialisation du client Calendar et affectation à la variable globale
+        calendar = google.calendar({ version: 'v3', auth: client });
+        console.log('✅ Client Google Calendar initialisé dans createAppointment');
+      } catch (error) {
+        console.error("❌ Erreur lors de l'initialisation de Google Calendar :", error);
+        return { success: false, message: "Erreur d'initialisation de Calendar" };
+      }
+    }
+  
+    // À partir d'ici, calendar est garanti d'être défini.
+    try {
+      // Définir l'événement à créer
+      const event = {
+        summary: `Cita de ${params.customerName}`,
+        description: `Téléphone: ${params.phoneNumber}\nService: ${params.service}`,
+        start: {
+          dateTime: `${params.date}T${params.startTime}:00`, // Ajout des secondes si besoin
+          timeZone: 'America/Bogota',
+        },
+        end: {
+          dateTime: `${params.date}T${params.endTime}:00`,
+          timeZone: 'America/Bogota',
+        },
+      };  
+  
+      // Insertion de l'événement dans l'agenda de diegodfr75@gmail.com
+      const calendarRes = await calendar.events.insert({
+        calendarId: params.calendarId,
+        resource: event,
+      });
+  
+      const eventId = calendarRes.data.id;
+      console.log('Événement créé sur Google Calendar, eventId =', eventId);
+  
+      // Insertion en base de données (MongoDB) avec l'eventId
+      await db.collection('appointments').insertOne({
+        customerName: params.customerName,
+        phoneNumber: params.phoneNumber,
+        date: params.date,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        service: params.service,
+        googleEventId: eventId
+      });
+  
+      return { success: true, message: 'Cita creada en Calendar y Mongo', eventId };
+    } catch (error) {
+      console.error("Erreur lors de la création de l'événement :", error);
+      return { success: false, message: 'No se pudo crear la cita.' };
+    }
+  }
+  
+  
+  async function cancelAppointment(phoneNumber) {
+    try {
+      // 1) Trouver le RDV en base
+      const appointment = await db.collection("appointments")
+          .findOne({ phoneNumber: params.phoneNumber, calendarId: params.calendarId });
+      if (!appointment) {
+        console.log("Aucun RDV trouvé pour ce phoneNumber:", phoneNumber);
+        return false;
+      }
+  
+      // 2) Supprimer l’event côté Google si googleEventId existe
+      if (appointment && appointment.googleEventId) {
+        await calendar.events.delete({
+          calendarId: params.calendarId,
+          eventId: appointment.googleEventId
+        });
+        console.log("Événement GoogleCalendar supprimé:", appointment.googleEventId);
+      } else {
+        console.log("Aucun googleEventId stocké, on ne supprime rien sur Google.");
+      }
+  
+      // 3) Supprimer en base
+      const result = await db.collection('appointments').deleteOne({ _id: appointment._id });
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error("Erreur cancelAppointment:", error);
+      return false;
+    }
+  }
 
 // Vérification du statut d'un run
 async function pollForCompletion(threadId, runId) {
