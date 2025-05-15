@@ -102,7 +102,7 @@ async function handleMessage(userMessage, userNumber) {
     await sendResponseToWhatsApp(messages, userNumber);
 
     // Sauvegarde
-    await db.collection('threads2').updateOne(
+    await db.collection('threads1').updateOne(
       { userNumber },
       {
         $set: { threadId },
@@ -199,7 +199,7 @@ async function interactWithAssistant(userMessage, userNumber) {
   
       // Sauvegarde des messages et du thread dans MongoDB
       if (messages) {
-        const collection = db.collection('threads2');
+        const collection = db.collection('threads1');
         await collection.updateOne(
           { userNumber },
           {
