@@ -29,8 +29,9 @@ if (!mongoUri) {
     process.exit(1);
 }
 
-const locks = new Map(); // clé: userNumber, valeur: boolean (true = en cours)
-const messageQueue = new Map(); // clé: userNumber, valeur: array de messages en attente
+const activeRuns = new Map(); // userNumber -> { threadId, runId }
+const locks = new Map(); // userNumber -> bool
+const messageQueue = new Map(); // userNumber -> array
 
 let db;  // Variable pour stocker la connexion à MongoDB
 
@@ -55,25 +56,81 @@ async function connectToMongoDB() {
 connectToMongoDB();
 
 async function handleMessage(userMessage, userNumber) {
-  if (locks.get(userNumber)) {
-    console.log(`⏳ Assistant occupé pour ${userNumber}, message en file d’attente.`);
-    if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
-    messageQueue.get(userNumber).push(userMessage);
-    return;
-  }
+  if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
+  messageQueue.get(userNumber).push(userMessage);
+
+  // Si verrou actif, on attend que le traitement en cours se termine
+  if (locks.get(userNumber)) return;
 
   locks.set(userNumber, true);
+
   try {
-    const response = await interactWithAssistant(userMessage, userNumber);
-    await sendResponseToWhatsApp(response, userNumber); // Tu peux l’extraire de ta route /whatsapp
+    // Si un run est actif, on tente de l’annuler
+    const runInfo = activeRuns.get(userNumber);
+    if (runInfo) {
+      try {
+        const runStatus = await openai.beta.threads.runs.retrieve(runInfo.threadId, runInfo.runId);
+        if (['queued', 'in_progress'].includes(runStatus.status)) {
+          await openai.beta.threads.runs.cancel(runInfo.threadId, runInfo.runId);
+          console.log(`🚫 Run annulé pour ${userNumber}`);
+        }
+      } catch (e) {
+        console.warn("⚠️ Impossible d’annuler le run (peut-être déjà terminé)");
+      }
+    }
+
+    // On combine tous les messages de la file
+    const queue = messageQueue.get(userNumber) || [];
+    const combinedMessage = queue.join(". ");
+    messageQueue.set(userNumber, []); // on vide la file
+
+    const threadId = await getOrCreateThreadId(userNumber);
+
+    // Envoi à OpenAI
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: `Mensaje del cliente: "${combinedMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' })} Hora actual: ${new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' })}`
+    });
+
+    const runResponse = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T"
+    });
+
+    activeRuns.set(userNumber, { threadId, runId: runResponse.id });
+
+    const messages = await pollForCompletion(threadId, runResponse.id);
+    await sendResponseToWhatsApp(messages, userNumber);
+
+    // Sauvegarde
+    await db.collection('threads2').updateOne(
+      { userNumber },
+      {
+        $set: { threadId },
+        $push: {
+          responses: {
+            userMessage: combinedMessage,
+            assistantResponse: {
+              text: messages.text,
+              note: messages.note
+            },
+            timestamp: new Date()
+          }
+        }
+      },
+      { upsert: true }
+    );
+
   } catch (error) {
-    console.error("Erreur dans handleMessage:", error);
+    console.error("❌ Erreur dans handleMessage :", error);
   } finally {
     locks.set(userNumber, false);
-    const queue = messageQueue.get(userNumber) || [];
-    if (queue.length > 0) {
-      const nextMessage = queue.shift();
-      setTimeout(() => handleMessage(nextMessage, userNumber), 1000); // traitement du message suivant après 1s
+    if ((messageQueue.get(userNumber) || []).length > 0) {
+      // Nouveau message arrivé entre-temps, on le traite maintenant
+      const next = messageQueue.get(userNumber).shift();
+      if (next) {
+        messageQueue.set(userNumber, [next, ...(messageQueue.get(userNumber) || [])]);
+        handleMessage("", userNumber); // Lancer le nouveau batch
+      }
     }
   }
 }
