@@ -335,7 +335,7 @@ async function startCalendar() {
   }
 
 // Vérification du statut d'un run
-async function pollForCompletion(threadId, runId) {
+async function pollForCompletion(threadId, runId, userNumber) {
   return new Promise((resolve, reject) => {
     const interval = 2000;
     const timeoutLimit = 80000;
@@ -348,9 +348,16 @@ async function pollForCompletion(threadId, runId) {
 
         if (runStatus.status === 'completed') {
           const messages = await fetchThreadMessages(threadId);
+
+          // 🧠 Vérifie si de nouveaux messages sont arrivés entre-temps
+          const currentQueue = messageQueue.get(userNumber) || [];
+          if (currentQueue.length > 0) {
+            console.log("📌 Réponse ignorée dans pollForCompletion : nouveaux messages détectés.");
+            return resolve({ skipped: true });
+          }
+
           console.log("📩 Réponse finale de l'assistant:", messages);
-          resolve(messages);
-          return;
+          return resolve({ skipped: false, messages });
         }
 
         if (
