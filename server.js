@@ -59,50 +59,36 @@ async function handleMessage(userMessage, userNumber) {
   if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
   messageQueue.get(userNumber).push(userMessage);
 
-  // 🔒 Attente active tant que le verrou est actif
-  while (locks.get(userNumber)) {
-    await new Promise(resolve => setTimeout(resolve, 200)); // pause de 200ms
-  }
+  // Si un traitement est déjà en cours, on ne relance rien
+  if (locks.get(userNumber)) return;
 
   locks.set(userNumber, true);
 
   try {
-    // 🛑 Annulation du run en cours s’il existe
-    const runInfo = activeRuns.get(userNumber);
-    if (runInfo) {
-      try {
-        const runStatus = await openai.beta.threads.runs.retrieve(runInfo.threadId, runInfo.runId);
-        if (['queued', 'in_progress'].includes(runStatus.status)) {
-          await openai.beta.threads.runs.cancel(runInfo.threadId, runInfo.runId);
-          console.log(`🚫 Run annulé pour ${userNumber}`);
-        }
-      } catch (e) {
-        console.warn("⚠️ Impossible d’annuler le run (peut-être déjà terminé)");
-      }
+    // 🔁 Récupérer tous les messages actuels dans la file
+    const initialQueue = [...messageQueue.get(userNumber)];
+    messageQueue.set(userNumber, []); // on vide temporairement
+
+    const combinedMessage = initialQueue.join(". ");
+    
+    const { threadId, runId, messages } = await interactWithAssistant(combinedMessage, userNumber);
+    activeRuns.set(userNumber, { threadId, runId });
+
+    // 📦 Vérifier s’il y a eu de nouveaux messages PENDANT le run
+    const newQueue = messageQueue.get(userNumber) || [];
+
+    if (newQueue.length > 0) {
+      console.log("📌 Réponse ignorée : de nouveaux messages sont arrivés pendant le run.");
+      // 🧃 Re-fusionner anciens + nouveaux et retraiter
+      const allMessages = [...initialQueue, ...newQueue];
+      messageQueue.set(userNumber, allMessages); // on repousse tout dans la file
+      locks.set(userNumber, false); // débloquer avant appel récursif
+      return await handleMessage("", userNumber);
     }
 
-    // 🧾 Concaténer tous les messages de la file
-    const queue = messageQueue.get(userNumber) || [];
-    const combinedMessage = queue.join(". ");
-    messageQueue.set(userNumber, []); // vider la file après extraction
-
-    const threadId = await getOrCreateThreadId(userNumber);
-
-    await openai.beta.threads.messages.create(threadId, {
-      role: "user",
-      content: `Mensaje del cliente: "${combinedMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' })} Hora actual: ${new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' })}`
-    });
-
-    const runResponse = await openai.beta.threads.runs.create(threadId, {
-      assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T"
-    });
-
-    activeRuns.set(userNumber, { threadId, runId: runResponse.id });
-
-    const messages = await pollForCompletion(threadId, runResponse.id);
+    // ✅ Aucun nouveau message — on peut envoyer la réponse
     await sendResponseToWhatsApp(messages, userNumber);
 
-    // Sauvegarde
     await db.collection('threads1').updateOne(
       { userNumber },
       {
@@ -125,11 +111,12 @@ async function handleMessage(userMessage, userNumber) {
     console.error("❌ Erreur dans handleMessage :", error);
   } finally {
     locks.set(userNumber, false);
+
     const remaining = messageQueue.get(userNumber) || [];
     if (remaining.length > 0) {
       const next = remaining.shift();
       messageQueue.set(userNumber, [next, ...remaining]);
-      await handleMessage("", userNumber); // appel récursif pour traiter le reste
+      await handleMessage("", userNumber); // relancer pour le prochain bloc
     }
   }
 }
@@ -170,60 +157,34 @@ async function getOrCreateThreadId(userNumber) {
 
 // Fonction pour interagir avec OpenAI
 async function interactWithAssistant(userMessage, userNumber) {
-    if (!userMessage || userMessage.trim() === "") {
-      throw new Error("Le contenu du message utilisateur est vide ou manquant.");
-    }
-  
-    try {
-      const threadId = await getOrCreateThreadId(userNumber);
-      const dateISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' });
-      const heure = new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' });
-  
-      // Envoi du message utilisateur à OpenAI
-      await openai.beta.threads.messages.create(threadId, {
-        role: "user",
-        content: `Mensaje del cliente: "${userMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${dateISO} Hora actual: ${heure}`
-      });
-  
-      // Création d'un nouveau "run" pour générer la réponse
-      const runResponse = await openai.beta.threads.runs.create(threadId, {
-        assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T" // Remplace par ton assistant_id
-      });
-  
-      const runId = runResponse.id;
-      // Attente de la fin du run ou d'un éventuel function calling
-      const messages = await pollForCompletion(threadId, runId);
-  
-      console.log("📩 Messages reçus de l'assistant :", messages);
-  
-      // Sauvegarde des messages et du thread dans MongoDB
-      if (messages) {
-        const collection = db.collection('threads1');
-        await collection.updateOne(
-          { userNumber },
-          {
-            $set: { threadId },
-            $push: {
-              responses: {
-                userMessage,
-                assistantResponse: {
-                  text: messages.text,
-                  note: messages.note // ✅ ici on stocke la note !
-                },
-                timestamp: new Date()
-              }
-            }
-          },
-          { upsert: true }
-        );
-      }
-  
-      return messages;
-    } catch (error) {
-      console.error("❌ Erreur lors de l'interaction avec l'assistant:", error);
-      throw error;
-    }
-  }  
+  try {
+    const threadId = await getOrCreateThreadId(userNumber);
+    const dateISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' });
+    const heure = new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' });
+
+    // 💬 Envoi du message utilisateur
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: `Mensaje del cliente: "${userMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${dateISO} Hora actual: ${heure}`
+    });
+
+    // ▶️ Création d’un nouveau run
+    const runResponse = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T"
+    });
+
+    const runId = runResponse.id;
+
+    // ⏳ Attente de la complétion
+    const messages = await pollForCompletion(threadId, runId);
+
+    return { threadId, runId, messages };
+  } catch (error) {
+    console.error("❌ Erreur dans interactWithAssistant:", error);
+    throw error;
+  }
+}
+
 
 async function initGoogleCalendarClient() {
     try {
