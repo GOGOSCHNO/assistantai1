@@ -624,22 +624,28 @@ async function sendResponseToWhatsApp(response, userNumber) {
 
 // Modification du endpoint WhatsApp pour gérer les images
 app.post('/whatsapp', async (req, res) => {
-  console.log('📩 Requête reçue :', JSON.stringify(req.body, null, 2));
-
+  // 📩 Requête reçue : log simplifié
   try {
+    // 📌 Déclaration variables
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const field = changes?.field;
-
-    // 🚫 Ignorer les événements qui ne sont pas de type "messages"
+  
+    // 🚫 Ignorer si ce n'est pas un message entrant
     if (field !== "messages" || !value.messages || !value.messages[0]) {
       return res.status(200).send("Pas un message entrant à traiter.");
     }
-
+  
+    // 📌 Déclaration message
     const message = value.messages[0];
-    const from = message.from;
-    const messageId = message.id;
+    const from = message.from; // numéro du client
+    const messageId = message.id; // ID unique du message
+    const name = value.contacts?.[0]?.profile?.name || "Inconnu";
+    const body = message?.text?.body || "🟡 Aucun contenu texte";
+  
+    // ✅ Log propre et lisible
+    console.log(`📥 Message reçu de ${name} (${from}) : "${body}"`);
 
     // ✅ Vérifier si ce message a déjà été traité
     const alreadyProcessed = await db.collection('processedMessages').findOne({ messageId });
