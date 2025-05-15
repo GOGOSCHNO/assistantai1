@@ -71,22 +71,18 @@ async function handleMessage(userMessage, userNumber) {
 
     const combinedMessage = initialQueue.join(". ");
     
-    const { threadId, runId, messages } = await interactWithAssistant(combinedMessage, userNumber);
+    const { threadId, runId, skipped, messages } = await interactWithAssistant(combinedMessage, userNumber);
     activeRuns.set(userNumber, { threadId, runId });
-
-    // 📦 Vérifier s’il y a eu de nouveaux messages PENDANT le run
-    const newQueue = messageQueue.get(userNumber) || [];
-
-    if (newQueue.length > 0) {
-      console.log("📌 Réponse ignorée : de nouveaux messages sont arrivés pendant le run.");
-      // 🧃 Re-fusionner anciens + nouveaux et retraiter
-      const allMessages = [...initialQueue, ...newQueue];
-      messageQueue.set(userNumber, allMessages); // on repousse tout dans la file
-      locks.set(userNumber, false); // débloquer avant appel récursif
+    
+    if (skipped) {
+      // ❌ La réponse a été ignorée car de nouveaux messages sont arrivés
+      const allMessages = [...initialQueue, ...(messageQueue.get(userNumber) || [])];
+      messageQueue.set(userNumber, allMessages);
+      locks.set(userNumber, false);
       return await handleMessage("", userNumber);
     }
-
-    // ✅ Aucun nouveau message — on peut envoyer la réponse
+    
+    // ✅ Aucun message supplémentaire, réponse valide
     await sendResponseToWhatsApp(messages, userNumber);
 
     await db.collection('threads1').updateOne(
