@@ -67,22 +67,24 @@ async function handleMessage(userMessage, userNumber) {
   try {
     // 🔁 Récupérer tous les messages actuels dans la file
     const initialQueue = [...messageQueue.get(userNumber)];
-    messageQueue.set(userNumber, []); // on vide temporairement
-
-    const combinedMessage = initialQueue.join(". ");
+    messageQueue.set(userNumber, []); // capter les nouveaux entre-temps
     
-    const { threadId, runId, skipped, messages } = await interactWithAssistant(combinedMessage, userNumber);
+    const combinedMessage = initialQueue.join(". ");
+    const { threadId, runId } = await interactWithAssistant(combinedMessage, userNumber);
     activeRuns.set(userNumber, { threadId, runId });
     
-    if (skipped) {
-      // ❌ La réponse a été ignorée car de nouveaux messages sont arrivés
-      const allMessages = [...initialQueue, ...(messageQueue.get(userNumber) || [])];
-      messageQueue.set(userNumber, allMessages);
+    const messages = await pollForCompletion(threadId, runId);
+    
+    // 🧠 Vérification ici : y a-t-il eu d'autres messages pendant le run ?
+    const newMessages = messageQueue.get(userNumber) || [];
+    if (newMessages.length > 0) {
+      console.log("⚠️ Réponse ignorée car nouveaux messages après envoi.");
+      messageQueue.set(userNumber, [...initialQueue, ...newMessages]);
       locks.set(userNumber, false);
       return await handleMessage("", userNumber);
     }
     
-    // ✅ Aucun message supplémentaire, réponse valide
+    // ✅ Sinon, envoyer la réponse
     await sendResponseToWhatsApp(messages, userNumber);
 
     await db.collection('threads1').updateOne(
@@ -344,16 +346,9 @@ async function pollForCompletion(threadId, runId, userNumber) {
 
         if (runStatus.status === 'completed') {
           const messages = await fetchThreadMessages(threadId);
-
-          // 🧠 Vérifie si de nouveaux messages sont arrivés entre-temps
-          const currentQueue = messageQueue.get(userNumber) || [];
-          if (currentQueue.length > 0) {
-            console.log("📌 Réponse ignorée dans pollForCompletion : nouveaux messages détectés.");
-            return resolve({ skipped: true });
-          }
-
           console.log("📩 Réponse finale de l'assistant:", messages);
-          return resolve({ skipped: false, messages });
+          resolve(messages);
+          return;
         }
 
         if (
