@@ -59,13 +59,15 @@ async function handleMessage(userMessage, userNumber) {
   if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
   messageQueue.get(userNumber).push(userMessage);
 
-  // Si verrou actif, on attend que le traitement en cours se termine
-  if (locks.get(userNumber)) return;
+  // 🔒 Attente active tant que le verrou est actif
+  while (locks.get(userNumber)) {
+    await new Promise(resolve => setTimeout(resolve, 200)); // pause de 200ms
+  }
 
   locks.set(userNumber, true);
 
   try {
-    // Si un run est actif, on tente de l’annuler
+    // 🛑 Annulation du run en cours s’il existe
     const runInfo = activeRuns.get(userNumber);
     if (runInfo) {
       try {
@@ -79,14 +81,13 @@ async function handleMessage(userMessage, userNumber) {
       }
     }
 
-    // On combine tous les messages de la file
+    // 🧾 Concaténer tous les messages de la file
     const queue = messageQueue.get(userNumber) || [];
     const combinedMessage = queue.join(". ");
-    messageQueue.set(userNumber, []); // on vide la file
+    messageQueue.set(userNumber, []); // vider la file après extraction
 
     const threadId = await getOrCreateThreadId(userNumber);
 
-    // Envoi à OpenAI
     await openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: `Mensaje del cliente: "${combinedMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Bogota' })} Hora actual: ${new Date().toLocaleTimeString('es-ES', { timeZone: 'America/Bogota' })}`
@@ -124,13 +125,11 @@ async function handleMessage(userMessage, userNumber) {
     console.error("❌ Erreur dans handleMessage :", error);
   } finally {
     locks.set(userNumber, false);
-    if ((messageQueue.get(userNumber) || []).length > 0) {
-      // Nouveau message arrivé entre-temps, on le traite maintenant
-      const next = messageQueue.get(userNumber).shift();
-      if (next) {
-        messageQueue.set(userNumber, [next, ...(messageQueue.get(userNumber) || [])]);
-        handleMessage("", userNumber); // Lancer le nouveau batch
-      }
+    const remaining = messageQueue.get(userNumber) || [];
+    if (remaining.length > 0) {
+      const next = remaining.shift();
+      messageQueue.set(userNumber, [next, ...remaining]);
+      await handleMessage("", userNumber); // appel récursif pour traiter le reste
     }
   }
 }
