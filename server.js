@@ -73,8 +73,6 @@ async function handleMessage(userMessage, userNumber) {
     const { threadId, runId } = await interactWithAssistant(combinedMessage, userNumber);
     activeRuns.set(userNumber, { threadId, runId });
     
-    const messages = await pollForCompletion(threadId, runId);
-    
     // 🧠 Vérification ici : y a-t-il eu d'autres messages pendant le run ?
     const newMessages = messageQueue.get(userNumber) || [];
     if (newMessages.length > 0) {
