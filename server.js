@@ -81,7 +81,7 @@ async function handleMessage(userMessage, userNumber) {
       locks.set(userNumber, false);
       return await handleMessage("", userNumber);
     }
-    
+    const messages = await pollForCompletion(threadId, runId);
     // ✅ Sinon, envoyer la réponse
     await sendResponseToWhatsApp(messages, userNumber);
 
