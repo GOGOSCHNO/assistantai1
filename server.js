@@ -58,19 +58,24 @@ connectToMongoDB();
 async function handleMessage(userMessage, userNumber) {
   if (!messageQueue.has(userNumber)) messageQueue.set(userNumber, []);
   messageQueue.get(userNumber).push(userMessage);
-
+  console.log(`🧾 Message ajouté à la file pour ${userNumber} : "${userMessage}"`);
+  
   // Si un traitement est déjà en cours, on ne relance rien
   if (locks.get(userNumber)) return;
 
   locks.set(userNumber, true);
+  console.log(`🔒 Lock activé pour ${userNumber}`);
 
   try {
     // 🔁 Récupérer tous les messages actuels dans la file
     const initialQueue = [...messageQueue.get(userNumber)];
+    console.log(`📚 File initiale de ${userNumber} :`, initialQueue);
     messageQueue.set(userNumber, []); // capter les nouveaux entre-temps
     
     const combinedMessage = initialQueue.join(". ");
     const { threadId, runId } = await interactWithAssistant(combinedMessage, userNumber);
+    console.log(`🧠 Assistant appelé avec : "${combinedMessage}"`);
+    console.log(`📎 threadId = ${threadId}, runId = ${runId}`);
     activeRuns.set(userNumber, { threadId, runId });
     
     // 🧠 Vérification ici : y a-t-il eu d'autres messages pendant le run ?
@@ -80,9 +85,11 @@ async function handleMessage(userMessage, userNumber) {
       messageQueue.set(userNumber, [...initialQueue, ...newMessages]);
       locks.set(userNumber, false);
       return await handleMessage("", userNumber);
+      console.log(`📥 Nouveaux messages détectés pendant le run pour ${userNumber} :`, newMessages);
     }
     const messages = await pollForCompletion(threadId, runId);
     // ✅ Sinon, envoyer la réponse
+    console.log(`📬 Envoi de la réponse finale à WhatsApp pour ${userNumber}`);
     await sendResponseToWhatsApp(messages, userNumber);
 
     await db.collection('threads1').updateOne(
@@ -102,10 +109,11 @@ async function handleMessage(userMessage, userNumber) {
       },
       { upsert: true }
     );
-
+  console.log("🗃️ Réponse enregistrée dans MongoDB pour", userNumber);
   } catch (error) {
     console.error("❌ Erreur dans handleMessage :", error);
   } finally {
+    console.log(`🔓 Lock libéré pour ${userNumber}`);
     locks.set(userNumber, false);
 
     const remaining = messageQueue.get(userNumber) || [];
@@ -113,6 +121,7 @@ async function handleMessage(userMessage, userNumber) {
       const next = remaining.shift();
       messageQueue.set(userNumber, [next, ...remaining]);
       await handleMessage("", userNumber); // relancer pour le prochain bloc
+      console.log(`➡️ Message restant détecté, relance de handleMessage() pour ${userNumber}`);
     }
   }
 }
