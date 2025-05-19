@@ -172,12 +172,13 @@ async function interactWithAssistant(userMessage, userNumber) {
       role: "user",
       content: `Mensaje del cliente: "${userMessage}". Nota: El número WhatsApp del cliente es ${userNumber}. Fecha actual: ${dateISO} Hora actual: ${heure}`
     });
+    console.log(`✉️ Message utilisateur ajouté au thread ${threadId}`);
 
     // ▶️ Création d’un nouveau run
     const runResponse = await openai.beta.threads.runs.create(threadId, {
       assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T"
     });
-
+    console.log(`▶️ Run lancé : runId = ${runId}`);
     const runId = runResponse.id;
 
     // ⏳ Attente de la complétion
