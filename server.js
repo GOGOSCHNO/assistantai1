@@ -178,8 +178,8 @@ async function interactWithAssistant(userMessage, userNumber) {
     const runResponse = await openai.beta.threads.runs.create(threadId, {
       assistant_id: "asst_aH2eDHwU2aIIUGjYNAi9h44T"
     });
-    console.log(`▶️ Run lancé : runId = ${runId}`);
     const runId = runResponse.id;
+    console.log(`▶️ Run lancé : runId = ${runId}`);
 
     // ⏳ Attente de la complétion
     const messages = await pollForCompletion(threadId, runId);
