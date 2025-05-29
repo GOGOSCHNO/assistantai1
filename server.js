@@ -586,18 +586,37 @@ async function fetchThreadMessages(threadId) {
     // Application de la conversion Markdown
     textContent = convertMarkdownToWhatsApp(textContent);
 
-    // Récupération des images issues du Function Calling
+    // Extraction des tool calls
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
+
+    // Images (ancienne méthode)
     const toolImageUrls = toolMessages
       .map(msg => msg.content?.[0]?.text?.value)
       .filter(url => url && url.startsWith('http'));
 
-    const images = [...markdownImageUrls, ...toolImageUrls];
+    // ➕ Extraction des PDF/documents depuis le function calling du catalogue
+    const toolDocuments = toolMessages
+      .map(msg => {
+        try {
+          const out = JSON.parse(msg.content?.[0]?.text?.value);
+          if (out.catalogueUrl && out.filename) {
+            return { link: out.catalogueUrl, filename: out.filename };
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
 
-    // ✅ Retour complet avec note extraite
+    const images = [...markdownImageUrls, ...toolImageUrls];
+    const documents = toolDocuments;
+
+    // ✅ Retour complet avec note extraite et documents
     return {
       text: textContent,
       images: images,
+      documents: documents,
       note: {
         summary: summaryNote,
         status: statusNote
@@ -609,10 +628,12 @@ async function fetchThreadMessages(threadId) {
     return {
       text: "",
       images: [],
+      documents: [],
       note: null
     };
   }
 }
+
 
 
 // Fonction pour récupérer les URLs des images depuis MongoDB
