@@ -529,6 +529,10 @@ async function pollForCompletion(threadId, runId, userNumber) {
 async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
+    // 🔍 Ajoute ce log ici :
+    console.log("=== [DEBUG] messagesResponse.data ===");
+    console.log(JSON.stringify(messagesResponse.data, null, 2));
+    // ===================
     const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
 
     const latestMessage = messages[0];
