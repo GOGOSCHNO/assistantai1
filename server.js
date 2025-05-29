@@ -340,12 +340,17 @@ async function startCalendar() {
     }
   }
 
-async function getCatalogueUrl(catalogueId = "catalogo2024") {
+async function getCatalogueData(catalogueId = "catalogo2024") {
   try {
     const catalogue = await db.collection("catalogue").findOne({ _id: catalogueId });
-    return catalogue ? catalogue.url : null;
+    if (!catalogue) return null;
+    // Si le champ filename n’existe pas, crée un nom par défaut
+    return {
+      url: catalogue.url,
+      filename: catalogue.filename || (catalogueId + ".pdf")
+    };
   } catch (error) {
-    console.error("Erreur lors de la récupération de l'URL du catalogue :", error);
+    console.error("Erreur lors de la récupération des données du catalogue :", error);
     return null;
   }
 }
@@ -477,12 +482,11 @@ async function pollForCompletion(threadId, runId, userNumber) {
               }
               case "get_catalogue_url": {
                 console.log("📄 Demande d'URL catalogue reçue:", params);
-                // Récupère l'ID du catalogue ou utilise la valeur par défaut
-                const catalogueUrl = await getCatalogueUrl(params.catalogueId || "catalogo2024");
-                
+                // Récupère URL et nom du fichier
+                const catalogueData = await getCatalogueData(params.catalogueId || "catalogo2024");
                 toolOutputs.push({
                   tool_call_id: id,
-                  output: JSON.stringify({ catalogueUrl })
+                  output: JSON.stringify({ catalogueUrl: catalogueData.url, filename: catalogueData.filename })
                 });
                 break;
               }
@@ -623,13 +627,14 @@ async function getImageUrl(imageCode) {
 }
 
 async function sendResponseToWhatsApp(response, userNumber) {
-  const { text, images } = response;
+  const { text, images = [], documents = [] } = response;
   const apiUrl = `https://graph.facebook.com/v16.0/${whatsappPhoneNumberId}/messages`;
   const headers = {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
   };
 
+  // 1. Envoi du texte
   if (text) {
     await axios.post(apiUrl, {
       messaging_product: 'whatsapp',
@@ -638,16 +643,40 @@ async function sendResponseToWhatsApp(response, userNumber) {
     }, { headers });
   }
 
-  if (images && images.length > 0) {
-    for (const url of images) {
-      if (url) {
-        await axios.post(apiUrl, {
-          messaging_product: 'whatsapp',
-          to: userNumber,
-          type: 'image',
-          image: { link: url },
-        }, { headers });
-      }
+  // 2. Envoi des documents PDF (nouveau - avec nom dynamique)
+  // --> Si "documents" existe, on l'utilise ; sinon, on check dans "images" pour des PDFs.
+  const docsArray = documents.length > 0 ? documents : images.filter(img =>
+    typeof img === 'object' && img.link && img.filename || (typeof img === 'string' && img.toLowerCase().endsWith('.pdf'))
+  ).map(doc => {
+    if (typeof doc === 'object') return doc;
+    return { link: doc, filename: "catalogo.pdf" }; // fallback si pas de nom spécifique
+  });
+
+  for (const doc of docsArray) {
+    if (doc.link && doc.filename) {
+      await axios.post(apiUrl, {
+        messaging_product: 'whatsapp',
+        to: userNumber,
+        type: 'document',
+        document: { link: doc.link, filename: doc.filename },
+      }, { headers });
+    }
+  }
+
+  // 3. Envoi des images classiques (tout ce qui n'est pas PDF/document)
+  for (const url of images) {
+    // Si déjà traité dans "documents", on skip
+    if ((typeof url === 'object' && url.link && url.filename) ||
+        (typeof url === 'string' && url.toLowerCase().endsWith('.pdf'))) {
+      continue;
+    }
+    if (typeof url === 'string' && url.startsWith('http')) {
+      await axios.post(apiUrl, {
+        messaging_product: 'whatsapp',
+        to: userNumber,
+        type: 'image',
+        image: { link: url },
+      }, { headers });
     }
   }
 }
