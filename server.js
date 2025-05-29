@@ -340,6 +340,16 @@ async function startCalendar() {
     }
   }
 
+async function getCatalogueUrl(catalogueId = "catalogo2024") {
+  try {
+    const catalogue = await db.collection("catalogue").findOne({ _id: catalogueId });
+    return catalogue ? catalogue.url : null;
+  } catch (error) {
+    console.error("Erreur lors de la récupération de l'URL du catalogue :", error);
+    return null;
+  }
+}
+
 // Vérification du statut d'un run
 async function pollForCompletion(threadId, runId, userNumber) {
   return new Promise((resolve, reject) => {
@@ -465,7 +475,17 @@ async function pollForCompletion(threadId, runId, userNumber) {
                 });
                 break;
               }
-
+              case "get_catalogue_url": {
+                console.log("📄 Demande d'URL catalogue reçue:", params);
+                // Récupère l'ID du catalogue ou utilise la valeur par défaut
+                const catalogueUrl = await getCatalogueUrl(params.catalogueId || "catalogo2024");
+                
+                toolOutputs.push({
+                  tool_call_id: id,
+                  output: JSON.stringify({ catalogueUrl })
+                });
+                break;
+              }
               default:
                 console.warn(`⚠️ Fonction inconnue (non gérée) : ${fn.name}`);
             }
