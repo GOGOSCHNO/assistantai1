@@ -340,21 +340,6 @@ async function startCalendar() {
     }
   }
 
-async function getCatalogueData(catalogueId = "catalogo2024") {
-  try {
-    const catalogue = await db.collection("catalogue").findOne({ _id: catalogueId });
-    if (!catalogue) return null;
-    // Si le champ filename n’existe pas, crée un nom par défaut
-    return {
-      url: catalogue.url,
-      filename: catalogue.filename || (catalogueId + ".pdf")
-    };
-  } catch (error) {
-    console.error("Erreur lors de la récupération des données du catalogue :", error);
-    return null;
-  }
-}
-
 // Vérification du statut d'un run
 async function pollForCompletion(threadId, runId, userNumber) {
   return new Promise((resolve, reject) => {
@@ -480,16 +465,6 @@ async function pollForCompletion(threadId, runId, userNumber) {
                 });
                 break;
               }
-              case "get_catalogue_url": {
-                console.log("📄 Demande d'URL catalogue reçue:", params);
-                // Récupère URL et nom du fichier
-                const catalogueData = await getCatalogueData(params.catalogueId || "catalogo2024");
-                toolOutputs.push({
-                  tool_call_id: id,
-                  output: JSON.stringify({ catalogueUrl: catalogueData.url, filename: catalogueData.filename })
-                });
-                break;
-              }
               default:
                 console.warn(`⚠️ Fonction inconnue (non gérée) : ${fn.name}`);
             }
@@ -529,10 +504,6 @@ async function pollForCompletion(threadId, runId, userNumber) {
 async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
-    // 🔍 Ajoute ce log ici :
-    console.log("=== [DEBUG] messagesResponse.data ===");
-    console.log(JSON.stringify(messagesResponse.data, null, 2));
-    // ===================
     const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
 
     const latestMessage = messages[0];
