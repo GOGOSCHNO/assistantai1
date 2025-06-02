@@ -448,6 +448,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
                 console.log("🖼️ Demande d'URL image reçue:", params);
                 const imageUrl = await getImageUrl(params.imageCode);
                 console.log("🖼️ Résultat getImageUrl pour", params.imageCode, ":", imageUrl);
+                if (imageUrl) pendingImages.push(imageUrl); // 🆕 On ajoute à la liste
                 toolOutputs.push({
                   tool_call_id: id,
                   output: JSON.stringify({ imageUrl })
@@ -502,7 +503,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
 
 // Récupérer les messages d'un thread
 // Récupérer les messages d'un thread
-async function fetchThreadMessages(threadId) {
+async function fetchThreadMessages(threadId, pendingImages = []) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
     const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
@@ -562,34 +563,34 @@ async function fetchThreadMessages(threadId) {
     // Application de la conversion Markdown
     textContent = convertMarkdownToWhatsApp(textContent);
 
-    // Récupération des images issues du Function Calling
+    // Récupération des images issues du Function Calling (fallback si jamais OpenAI les stocke dans le thread)
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
     for (const msg of toolMessages) {
       console.log("🪄 toolMessage brut:", JSON.stringify(msg, null, 2));
     }
-    // Nouvelle extraction intelligente du champ imageUrl même si c'est un JSON
     const toolImageUrls = toolMessages
       .map(msg => {
         const txt = msg.content?.[0]?.text?.value;
         if (!txt) return null;
         try {
-          // On tente de parser le JSON
           const obj = JSON.parse(txt);
           return obj.imageUrl || null;
         } catch (e) {
-          // Si ce n'est pas du JSON, on tente de vérifier si c'est une URL brute
           if (txt.startsWith('http')) return txt;
           return null;
         }
       })
       .filter(url => url && url.startsWith('http'));
 
-    const images = [...markdownImageUrls, ...toolImageUrls];
+    // 🆕 Fusion de toutes les sources d’images :
+    const images = [
+      ...markdownImageUrls,
+      ...toolImageUrls,
+      ...pendingImages // <--- images récoltées lors du function calling
+    ];
 
-    // Log pour contrôle
     console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
 
-    // ✅ Retour complet avec note extraite
     return {
       text: textContent,
       images: images,
