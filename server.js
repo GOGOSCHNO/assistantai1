@@ -447,7 +447,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
               case "get_image_url": {
                 console.log("🖼️ Demande d'URL image reçue:", params);
                 const imageUrl = await getImageUrl(params.imageCode);
-
+                console.log("🖼️ Résultat getImageUrl pour", params.imageCode, ":", imageUrl);
                 toolOutputs.push({
                   tool_call_id: id,
                   output: JSON.stringify({ imageUrl })
@@ -568,7 +568,8 @@ async function fetchThreadMessages(threadId) {
       .filter(url => url && url.startsWith('http'));
 
     const images = [...markdownImageUrls, ...toolImageUrls];
-
+    console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
+    
     // ✅ Retour complet avec note extraite
     return {
       text: textContent,
@@ -594,6 +595,7 @@ async function fetchThreadMessages(threadId) {
 async function getImageUrl(imageCode) {
   try {
     const image = await db.collection("images").findOne({ _id: imageCode });
+    console.log("🔍 Recherche image dans MongoDB :", imageCode, "->", image);
     return image ? image.url : null;
   } catch (error) {
     console.error("Erreur récupération URL image:", error);
@@ -602,6 +604,7 @@ async function getImageUrl(imageCode) {
 }
 
 async function sendResponseToWhatsApp(response, userNumber) {
+  console.log("📤 Envoi WhatsApp : texte =", text, "images =", images);
   const { text, images } = response;
   const apiUrl = `https://graph.facebook.com/v16.0/${whatsappPhoneNumberId}/messages`;
   const headers = {
