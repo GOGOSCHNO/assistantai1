@@ -561,37 +561,18 @@ async function fetchThreadMessages(threadId) {
     // Application de la conversion Markdown
     textContent = convertMarkdownToWhatsApp(textContent);
 
-    // Extraction des tool calls
+    // Récupération des images issues du Function Calling
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
-
-    // Images (ancienne méthode)
     const toolImageUrls = toolMessages
       .map(msg => msg.content?.[0]?.text?.value)
       .filter(url => url && url.startsWith('http'));
 
-    // ➕ Extraction des PDF/documents depuis le function calling du catalogue
-    const toolDocuments = toolMessages
-      .map(msg => {
-        try {
-          const out = JSON.parse(msg.content?.[0]?.text?.value);
-          if (out.catalogueUrl && out.filename) {
-            return { link: out.catalogueUrl, filename: out.filename };
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-
     const images = [...markdownImageUrls, ...toolImageUrls];
-    const documents = toolDocuments;
 
-    // ✅ Retour complet avec note extraite et documents
+    // ✅ Retour complet avec note extraite
     return {
       text: textContent,
       images: images,
-      documents: documents,
       note: {
         summary: summaryNote,
         status: statusNote
@@ -603,12 +584,10 @@ async function fetchThreadMessages(threadId) {
     return {
       text: "",
       images: [],
-      documents: [],
       note: null
     };
   }
 }
-
 
 
 // Fonction pour récupérer les URLs des images depuis MongoDB
@@ -623,14 +602,13 @@ async function getImageUrl(imageCode) {
 }
 
 async function sendResponseToWhatsApp(response, userNumber) {
-  const { text, images = [], documents = [] } = response;
+  const { text, images } = response;
   const apiUrl = `https://graph.facebook.com/v16.0/${whatsappPhoneNumberId}/messages`;
   const headers = {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
   };
 
-  // 1. Envoi du texte
   if (text) {
     await axios.post(apiUrl, {
       messaging_product: 'whatsapp',
@@ -639,44 +617,19 @@ async function sendResponseToWhatsApp(response, userNumber) {
     }, { headers });
   }
 
-  // 2. Envoi des documents PDF (nouveau - avec nom dynamique)
-  // --> Si "documents" existe, on l'utilise ; sinon, on check dans "images" pour des PDFs.
-  const docsArray = documents.length > 0 ? documents : images.filter(img =>
-    typeof img === 'object' && img.link && img.filename || (typeof img === 'string' && img.toLowerCase().endsWith('.pdf'))
-  ).map(doc => {
-    if (typeof doc === 'object') return doc;
-    return { link: doc, filename: "catalogo.pdf" }; // fallback si pas de nom spécifique
-  });
-
-  for (const doc of docsArray) {
-    if (doc.link && doc.filename) {
-      await axios.post(apiUrl, {
-        messaging_product: 'whatsapp',
-        to: userNumber,
-        type: 'document',
-        document: { link: doc.link, filename: doc.filename },
-      }, { headers });
-    }
-  }
-
-  // 3. Envoi des images classiques (tout ce qui n'est pas PDF/document)
-  for (const url of images) {
-    // Si déjà traité dans "documents", on skip
-    if ((typeof url === 'object' && url.link && url.filename) ||
-        (typeof url === 'string' && url.toLowerCase().endsWith('.pdf'))) {
-      continue;
-    }
-    if (typeof url === 'string' && url.startsWith('http')) {
-      await axios.post(apiUrl, {
-        messaging_product: 'whatsapp',
-        to: userNumber,
-        type: 'image',
-        image: { link: url },
-      }, { headers });
+  if (images && images.length > 0) {
+    for (const url of images) {
+      if (url) {
+        await axios.post(apiUrl, {
+          messaging_product: 'whatsapp',
+          to: userNumber,
+          type: 'image',
+          image: { link: url },
+        }, { headers });
+      }
     }
   }
 }
-
 // Modification du endpoint WhatsApp pour gérer les images
 app.post('/whatsapp', async (req, res) => {
   // 📩 Requête reçue : log simplifié
