@@ -564,6 +564,9 @@ async function fetchThreadMessages(threadId) {
 
     // Récupération des images issues du Function Calling
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
+    for (const msg of toolMessages) {
+      console.log("🪄 toolMessage brut:", JSON.stringify(msg, null, 2));
+    }
     // Nouvelle extraction intelligente du champ imageUrl même si c'est un JSON
     const toolImageUrls = toolMessages
       .map(msg => {
