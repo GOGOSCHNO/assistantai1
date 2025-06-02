@@ -501,6 +501,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
 }
 
 // Récupérer les messages d'un thread
+// Récupérer les messages d'un thread
 async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
@@ -563,13 +564,28 @@ async function fetchThreadMessages(threadId) {
 
     // Récupération des images issues du Function Calling
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
+    // Nouvelle extraction intelligente du champ imageUrl même si c'est un JSON
     const toolImageUrls = toolMessages
-      .map(msg => msg.content?.[0]?.text?.value)
+      .map(msg => {
+        const txt = msg.content?.[0]?.text?.value;
+        if (!txt) return null;
+        try {
+          // On tente de parser le JSON
+          const obj = JSON.parse(txt);
+          return obj.imageUrl || null;
+        } catch (e) {
+          // Si ce n'est pas du JSON, on tente de vérifier si c'est une URL brute
+          if (txt.startsWith('http')) return txt;
+          return null;
+        }
+      })
       .filter(url => url && url.startsWith('http'));
 
     const images = [...markdownImageUrls, ...toolImageUrls];
+
+    // Log pour contrôle
     console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
-    
+
     // ✅ Retour complet avec note extraite
     return {
       text: textContent,
