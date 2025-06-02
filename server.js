@@ -620,8 +620,8 @@ async function getImageUrl(imageCode) {
 }
 
 async function sendResponseToWhatsApp(response, userNumber) {
-  console.log("📤 Envoi WhatsApp : texte =", text, "images =", images);
   const { text, images } = response;
+  console.log("📤 Envoi WhatsApp : texte =", text, "images =", images);
   const apiUrl = `https://graph.facebook.com/v16.0/${whatsappPhoneNumberId}/messages`;
   const headers = {
     Authorization: `Bearer ${token}`,
