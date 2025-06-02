@@ -347,6 +347,8 @@ async function pollForCompletion(threadId, runId, userNumber) {
     const timeoutLimit = 80000;
     let elapsedTime = 0;
 
+    let pendingImages = [];
+
     const checkRun = async () => {
       try {
         const runStatus = await openai.beta.threads.runs.retrieve(threadId, runId);
