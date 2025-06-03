@@ -513,7 +513,6 @@ async function fetchThreadMessages(threadId) {
       .map(c => c.text.value)
       .join(" ");
 
-
     // --- Extraction des URLs d'image dans le texte (jpg, png, webp, etc)
     const imageUrlRegex = /https?:\/\/[^\s)]+?\.(?:png|jpg|jpeg|webp|gif)/gi;
     let imageUrls = [];
@@ -521,7 +520,7 @@ async function fetchThreadMessages(threadId) {
     while ((match = imageUrlRegex.exec(textContent)) !== null) {
       imageUrls.push(match[0]);
     }
-    // Nettoyage du texte : on retire les URLs brutes et préfixes "Imagen:"
+    // Nettoyage du texte : on retire les URLs brutes et préfixes "Imagen:"
     imageUrls.forEach(url => {
       textContent = textContent.replace(new RegExp(`(Imagen:?\\s*)?${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), '');
     });
@@ -579,7 +578,6 @@ async function fetchThreadMessages(threadId) {
     // Récupération de toutes les URLs d'images issues du Function Calling (JSON)
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
     const toolImageUrls = [];
-    
     for (const msg of toolMessages) {
       const value = msg.content?.[0]?.text?.value;
       if (value) {
@@ -597,7 +595,13 @@ async function fetchThreadMessages(threadId) {
         }
       }
     }
-    const images = [...markdownImageUrls, ...toolImageUrls];
+
+    // ➡️ On fusionne toutes les URLs extraites (texte + function calling), sans doublon
+    const images = Array.from(new Set([
+      ...imageUrls,
+      ...plainImageUrls,
+      ...toolImageUrls
+    ]));
 
     console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
 
