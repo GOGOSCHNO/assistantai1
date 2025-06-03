@@ -504,8 +504,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
 }
 
 // Récupérer les messages d'un thread
-// Récupérer les messages d'un thread
-async function fetchThreadMessages(threadId, pendingImages = []) {
+async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
     const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
@@ -565,34 +564,15 @@ async function fetchThreadMessages(threadId, pendingImages = []) {
     // Application de la conversion Markdown
     textContent = convertMarkdownToWhatsApp(textContent);
 
-    // Récupération des images issues du Function Calling (fallback si jamais OpenAI les stocke dans le thread)
+    // Récupération des images issues du Function Calling
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
-    for (const msg of toolMessages) {
-      console.log("🪄 toolMessage brut:", JSON.stringify(msg, null, 2));
-    }
     const toolImageUrls = toolMessages
-      .map(msg => {
-        const txt = msg.content?.[0]?.text?.value;
-        if (!txt) return null;
-        try {
-          const obj = JSON.parse(txt);
-          return obj.imageUrl || null;
-        } catch (e) {
-          if (txt.startsWith('http')) return txt;
-          return null;
-        }
-      })
+      .map(msg => msg.content?.[0]?.text?.value)
       .filter(url => url && url.startsWith('http'));
 
-    // 🆕 Fusion de toutes les sources d’images :
-    const images = [
-      ...markdownImageUrls,
-      ...toolImageUrls,
-      ...pendingImages // <--- images récoltées lors du function calling
-    ];
+    const images = [...markdownImageUrls, ...toolImageUrls];
 
-    console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
-
+    // ✅ Retour complet avec note extraite
     return {
       text: textContent,
       images: images,
@@ -612,15 +592,20 @@ async function fetchThreadMessages(threadId, pendingImages = []) {
   }
 }
 
-
 // Fonction pour récupérer les URLs des images depuis MongoDB
 async function getImageUrl(imageCode) {
   try {
     const image = await db.collection("images").findOne({ _id: imageCode });
-    console.log("🔍 Recherche image dans MongoDB :", imageCode, "->", image);
+
+    if (image && image.url) {
+      console.log(`✅ URL trouvée pour le code "${imageCode}" : ${image.url}`);
+    } else {
+      console.warn(`⚠️ Aucune URL trouvée pour le code "${imageCode}".`);
+    }
+
     return image ? image.url : null;
   } catch (error) {
-    console.error("Erreur récupération URL image:", error);
+    console.error("❌ Erreur récupération URL image:", error);
     return null;
   }
 }
@@ -655,6 +640,7 @@ async function sendResponseToWhatsApp(response, userNumber) {
     }
   }
 }
+
 // Modification du endpoint WhatsApp pour gérer les images
 app.post('/whatsapp', async (req, res) => {
   // 📩 Requête reçue : log simplifié
