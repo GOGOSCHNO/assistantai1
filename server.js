@@ -504,33 +504,48 @@ async function pollForCompletion(threadId, runId, userNumber) {
 async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
-    const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
+
+    // Log complet pour audit/debug
     console.log("🟣 Messages assistant bruts :", JSON.stringify(messagesResponse.data, null, 2));
+
+    const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
     const latestMessage = messages[0];
+
     let textContent = latestMessage.content
       .filter(c => c.type === 'text')
       .map(c => c.text.value)
       .join(" ");
 
-    // Extraction des URLs Markdown du texte
+    // Extraction des URLs images en Markdown
     const markdownUrlRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
     let match;
     const markdownImageUrls = [];
-
     while ((match = markdownUrlRegex.exec(textContent)) !== null) {
       markdownImageUrls.push(match[1]);
     }
-
-    // Nettoyage des URL markdown du texte
+    // Retire les images Markdown du texte
     textContent = textContent.replace(markdownUrlRegex, '').trim();
 
     // Suppression des références internes 【XX:XX†nomfichier.json】
     textContent = textContent.replace(/【\d+:\d+†[^\]]+】/g, '').trim();
 
+    // Extraction et suppression des URLs directes (hors Markdown)
+    const plainUrlRegex = /(https?:\/\/[^\s]+)/g;
+    const imageExtensions = /\.(png|jpg|jpeg|webp|gif)$/i;
+    let plainMatch;
+    const plainImageUrls = [];
+    while ((plainMatch = plainUrlRegex.exec(textContent)) !== null) {
+      // Optionnel : ne prendre que les images
+      if (imageExtensions.test(plainMatch[1])) {
+        plainImageUrls.push(plainMatch[1]);
+        // Supprime cette URL du texte à envoyer
+        textContent = textContent.replace(plainMatch[1], '').replace(/\s\s+/g, ' ').trim();
+      }
+    }
+
     // ➕ Détection et extraction de la nota interna
     let summaryNote = null;
     let statusNote = null;
-
     const noteStart = textContent.indexOf('--- Nota interna ---');
     if (noteStart !== -1) {
       const noteContent = textContent.slice(noteStart).replace(/[-]+/g, '').trim();
@@ -545,7 +560,7 @@ async function fetchThreadMessages(threadId) {
       textContent = textContent.slice(0, noteStart).trim();
     }
 
-    // ➕ Conversion Markdown OpenAI → Markdown WhatsApp
+    // ➕ Conversion Markdown OpenAI → Markdown WhatsApp (optionnel, adapte si tu veux)
     function convertMarkdownToWhatsApp(text) {
       return text
         .replace(/\*\*(.*?)\*\*/g, '*$1*')          // Gras
@@ -557,17 +572,22 @@ async function fetchThreadMessages(threadId) {
         .replace(/^(\d+)\.\s/gm, '- ')              // Listes
         .trim();
     }
-
-    // Application de la conversion Markdown
     textContent = convertMarkdownToWhatsApp(textContent);
 
-    // Récupération des images issues du Function Calling
+    // Extraction d’images issues du Function Calling (par sécurité, utile si jamais assistant les place là)
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
     const toolImageUrls = toolMessages
       .map(msg => msg.content?.[0]?.text?.value)
       .filter(url => url && url.startsWith('http'));
 
-    const images = [...markdownImageUrls, ...toolImageUrls];
+    // Fusionne toutes les sources d’images :
+    const images = [
+      ...markdownImageUrls,
+      ...toolImageUrls,
+      ...plainImageUrls
+    ];
+
+    console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
 
     // ✅ Retour complet avec note extraite
     return {
