@@ -572,17 +572,28 @@ async function fetchThreadMessages(threadId) {
     textContent = convertMarkdownToWhatsApp(textContent);
 
     // Extraction d’images issues du Function Calling (par sécurité, utile si jamais assistant les place là)
+    // Récupération de toutes les URLs d'images issues du Function Calling (JSON)
     const toolMessages = messagesResponse.data.filter(msg => msg.role === 'tool');
-    const toolImageUrls = toolMessages
-      .map(msg => msg.content?.[0]?.text?.value)
-      .filter(url => url && url.startsWith('http'));
-
-    // Fusionne toutes les sources d’images :
-    const images = [
-      ...markdownImageUrls,
-      ...toolImageUrls,
-      ...plainImageUrls
-    ];
+    const toolImageUrls = [];
+    
+    for (const msg of toolMessages) {
+      const value = msg.content?.[0]?.text?.value;
+      if (value) {
+        try {
+          // On attend {"imageUrl": "url"}
+          const obj = JSON.parse(value);
+          if (obj.imageUrl && obj.imageUrl.startsWith('http')) {
+            toolImageUrls.push(obj.imageUrl);
+          }
+        } catch (e) {
+          // Si ce n’est pas du JSON (rare), on tente de récupérer direct une url brute
+          if (typeof value === "string" && value.startsWith('http')) {
+            toolImageUrls.push(value);
+          }
+        }
+      }
+    }
+    const images = [...markdownImageUrls, ...toolImageUrls];
 
     console.log("🖼️ Images extraites dans fetchThreadMessages:", images);
 
