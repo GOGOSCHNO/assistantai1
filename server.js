@@ -347,8 +347,6 @@ async function pollForCompletion(threadId, runId, userNumber) {
     const timeoutLimit = 80000;
     let elapsedTime = 0;
 
-    let pendingImages = [];
-
     const checkRun = async () => {
       try {
         const runStatus = await openai.beta.threads.runs.retrieve(threadId, runId);
@@ -449,8 +447,7 @@ async function pollForCompletion(threadId, runId, userNumber) {
               case "get_image_url": {
                 console.log("🖼️ Demande d'URL image reçue:", params);
                 const imageUrl = await getImageUrl(params.imageCode);
-                console.log("🖼️ Résultat getImageUrl pour", params.imageCode, ":", imageUrl);
-                if (imageUrl) pendingImages.push(imageUrl); // 🆕 On ajoute à la liste
+
                 toolOutputs.push({
                   tool_call_id: id,
                   output: JSON.stringify({ imageUrl })
