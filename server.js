@@ -505,7 +505,7 @@ async function fetchThreadMessages(threadId) {
   try {
     const messagesResponse = await openai.beta.threads.messages.list(threadId);
     const messages = messagesResponse.data.filter(msg => msg.role === 'assistant');
-
+    console.log("🟣 Messages assistant bruts :", JSON.stringify(messagesResponse.data, null, 2));
     const latestMessage = messages[0];
     let textContent = latestMessage.content
       .filter(c => c.type === 'text')
