@@ -513,15 +513,19 @@ async function fetchThreadMessages(threadId) {
       .map(c => c.text.value)
       .join(" ");
 
-    // Extraction des URLs images en Markdown
-    const markdownUrlRegex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+
+    // --- Extraction des URLs d'image dans le texte (jpg, png, webp, etc)
+    const imageUrlRegex = /https?:\/\/[^\s)]+?\.(?:png|jpg|jpeg|webp|gif)/gi;
+    let imageUrls = [];
     let match;
-    const markdownImageUrls = [];
-    while ((match = markdownUrlRegex.exec(textContent)) !== null) {
-      markdownImageUrls.push(match[1]);
+    while ((match = imageUrlRegex.exec(textContent)) !== null) {
+      imageUrls.push(match[0]);
     }
-    // Retire les images Markdown du texte
-    textContent = textContent.replace(markdownUrlRegex, '').trim();
+    // Nettoyage du texte : on retire les URLs brutes et préfixes "Imagen:"
+    imageUrls.forEach(url => {
+      textContent = textContent.replace(new RegExp(`(Imagen:?\\s*)?${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), '');
+    });
+    textContent = textContent.replace(/\n{2,}/g, '\n').trim();
 
     // Suppression des références internes 【XX:XX†nomfichier.json】
     textContent = textContent.replace(/【\d+:\d+†[^\]]+】/g, '').trim();
