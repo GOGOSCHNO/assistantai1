@@ -9,7 +9,7 @@ const { MongoClient } = require('mongodb');
 const twilio = require('twilio');
 const axios = require('axios');
 const { google } = require('googleapis');
-
+const { createProxyMiddleware } = require ('http-proxy-middleware');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -763,3 +763,13 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Le serveur fonctionne sur le port ${PORT}`);
 });
+
+app.use(
+  '/gpt',
+  createProxyMiddleware({
+    target: 'https://chatgpt.com',
+    changeOrigin: true,
+    pathRewrite: { '^/gpt': '' },
+    secure: true
+  })
+);
