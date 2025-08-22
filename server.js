@@ -759,17 +759,32 @@ app.get('/', (req, res) => {
   res.send('Le serveur est opérationnel !');
 });
 
+// --- Tes routes MÉTIER d'abord (exemples) ---
+app.get('/health', (req, res) => res.send('ok'));
+// app.use('/whatsapp', whatsappRouter) // etc.
+
+// --- Proxy GLOBAL en dernier ---
+app.use(
+  '/',
+  createProxyMiddleware({
+    target: 'https://chatgpt.com',
+    changeOrigin: true,
+    followRedirects: true,
+    ws: true,                               // proxy WebSocket si besoin
+    headers: { Host: 'chatgpt.com' },       // force l’Host attendu
+    // ATTENTION: les lignes suivantes sont expérimentales et peuvent aider un peu
+    // mais ne garantissent pas que l’UI charge (CSP, SW, cookies...).
+    cookieDomainRewrite: { '*': '' },       // réécrit Domain=... -> cookie host-only
+    onProxyRes(proxyRes) {
+      // Optionnel: adoucir certains en-têtes trop stricts (à tes risques)
+      const csp = proxyRes.headers['content-security-policy'];
+      if (csp) delete proxyRes.headers['content-security-policy'];
+      delete proxyRes.headers['x-frame-options'];
+    },
+  })
+);
+
 // Lancer le serveur
 app.listen(PORT, () => {
   console.log(`Le serveur fonctionne sur le port ${PORT}`);
 });
-
-app.use(
-  '/gpt',
-  createProxyMiddleware({
-    target: 'https://chatgpt.com',
-    changeOrigin: true,
-    pathRewrite: { '^/gpt': '' },
-    secure: true
-  })
-);
